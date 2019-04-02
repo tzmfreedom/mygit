@@ -7,7 +7,10 @@ main :: IO ()
 main = do
   args <- getArgs
   let (x:xs) = args
-  case args !! 0 of
+  case x of
     "init" -> initCommand xs
     "add" -> addCommand xs
+    "status" -> statusCommand xs
     "commit" -> commitCommand xs
+    "logs" -> logsCommand xs
+    "cat-file" -> catFileCommand xs
