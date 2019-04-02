@@ -8,6 +8,7 @@ module Lib
 
 import Data.ByteString as B
 import Data.Hex
+import Data.List as L
 import Data.List.Split
 import System.Directory
 import Control.Monad.Extra
@@ -17,7 +18,8 @@ import qualified Crypto.Hash.SHA1 as SHA1
 data Object = Object{
   objectPerm :: [Int],
   objectType :: String,
-  objectHash :: String
+  objectHash :: String,
+  objectName :: String
 } deriving Show
 
 myGitDirectory :: String
@@ -46,13 +48,34 @@ addCommand args = do
   content <- B.readFile file
   B.writeFile (myGitDirectory ++ "/" ++ objectDirectory ++ "/" ++ (contentHashFileName content)) content
 
-
 writeIndex :: String -> ByteString -> IO ()
 writeIndex file content = do
-  B.writeFile file content
+  objects <- readIndexObjects
+  unless (Prelude.any (\x -> file == objectName x) objects) (addObjectToIndex objects file content)
 
-readIndex :: IO [Object]
-readIndex = do
+addObjectToIndex :: [Object] -> String -> ByteString -> IO ()
+addObjectToIndex objects file content = do
+  writeObjectsToIndex (object:objects)
+  where object = Object{
+    objectPerm = [7,5,5],
+    objectType = "file",
+    objectHash = contentHashFileName content,
+    objectName = file
+    }
+
+writeObjectsToIndex :: [Object] -> IO ()
+writeObjectsToIndex objects = do
+  Prelude.writeFile (myGitDirectory ++ "/" ++ indexFile) content
+  where content = L.intercalate "\n" (Prelude.map objectToString objects)
+
+objectToString :: Object -> String
+objectToString o = do
+  L.intercalate " " [permToString o, objectType o, objectHash o, objectName o]
+  where
+    permToString o = L.foldl (\x y -> x ++ (show y)) "" (objectPerm o)
+
+readIndexObjects :: IO [Object]
+readIndexObjects = do
   content <- Prelude.readFile (myGitDirectory ++ "/" ++ indexFile)
   let linesOfFiles = lines content
   return (Prelude.map parseToObject linesOfFiles)
@@ -65,7 +88,8 @@ parseToObject content = do
   Object{
     objectPerm = perm (cols !! 0),
     objectType = cols !! 1,
-    objectHash = cols !! 2
+    objectHash = cols !! 2,
+    objectName = cols !! 3
     }
 
 contentHashFileName :: ByteString -> String
