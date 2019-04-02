@@ -28,6 +28,7 @@ dependencies:
 - extra
 - utf8-string
 - split
+- strict-io
 
 library:
   source-dirs: src

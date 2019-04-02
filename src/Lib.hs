@@ -16,6 +16,7 @@ import Data.List.Split
 import System.Directory
 import Control.Monad.Extra
 import Codec.Binary.UTF8.String
+import System.IO.Strict as SIO
 import qualified Crypto.Hash.SHA1 as SHA1
 
 data Object = Object{
@@ -80,7 +81,7 @@ objectToString o = do
 
 readIndexObjects :: IO [Object]
 readIndexObjects = do
-  content <- Prelude.readFile (myGitDirectory ++ "/" ++ indexFile)
+  content <- SIO.run $ SIO.readFile (myGitDirectory ++ "/" ++ indexFile)
   let linesOfFiles = [x | x <- lines content, x /= ""]
   return (Prelude.map parseToObject linesOfFiles)
 
@@ -88,7 +89,7 @@ parseToObject :: String -> Object
 parseToObject content = do
   let cols = splitOn " " content
       perm :: String -> [Int]
-      perm p = Prelude.map (read . pure :: Char -> Int) p
+      perm p = Prelude.map (Prelude.read . pure :: Char -> Int) p
   Object{
     objectPerm = perm (cols !! 0),
     objectType = cols !! 1,
@@ -103,11 +104,14 @@ contentHashFileName content = decode $ unpack $ hex $ SHA1.hash content
 
 commitCommand :: [String] -> IO ()
 commitCommand args = do
-  object <- readIndexObjects
-  treeHash <- writeTree object
-  writeCommit treeHash
-  clearIndex
-  return ()
+  objects <- readIndexObjects
+  if (L.length objects) == 0 then do
+    Prelude.print "no stage object"
+  else do
+    treeHash <- writeTree objects
+    writeCommit treeHash
+    clearIndex
+    return ()
 
 writeTree :: [Object] -> IO String
 writeTree objects = do
@@ -119,8 +123,11 @@ writeTree objects = do
 writeCommit :: String -> IO ()
 writeCommit treeHash = do
   parentCommitHash <- currentRef
-  parentTreeHash <- Prelude.readFile (myGitDirectory ++ "/" ++ objectDirectory ++ "/" ++ parentCommitHash)
-  if parentTreeHash == treeHash then return ()
+  parentCommit <- Prelude.readFile (myGitDirectory ++ "/" ++ objectDirectory ++ "/" ++ parentCommitHash)
+  let commits = lines parentCommit
+  if commits !! 0 == treeHash then do
+    Prelude.print "same commit"
+    return ()
   else do
     let content = (treeHash ++ "\n" ++ parentCommitHash)
         commitHash = contentHashFileName $ pack $ encode content
@@ -139,12 +146,12 @@ currentRef = Prelude.readFile (myGitDirectory ++ "/" ++ headFile)
 
 statusCommand :: [String] -> IO ()
 statusCommand args = do
-  print =<< readIndexObjects
+  Prelude.print =<< readIndexObjects
 
 logsCommand :: [String] -> IO ()
 logsCommand args = do
   commitHash <- Prelude.readFile (myGitDirectory ++ "/" ++ headFile)
-  print =<< readCommitHash commitHash
+  Prelude.print =<< readCommitHash commitHash
 
 readCommitHash :: String -> IO [Object]
 readCommitHash commitHash = do
@@ -157,4 +164,4 @@ readCommitHash commitHash = do
 
 catFileCommand :: [String] -> IO ()
 catFileCommand args = do
-  print =<< Prelude.readFile (myGitDirectory ++ "/" ++ objectDirectory ++ "/" ++ (args !! 0))
+  Prelude.print =<< Prelude.readFile (myGitDirectory ++ "/" ++ objectDirectory ++ "/" ++ (args !! 0))
