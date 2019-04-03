@@ -34,7 +34,7 @@ library:
   source-dirs: src
 
 executables:
-  mygit-exe:
+  mygit:
     main:                Main.hs
     source-dirs:         app
     ghc-options:

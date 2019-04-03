@@ -12,5 +12,5 @@ main = do
     "add" -> addCommand xs
     "status" -> statusCommand xs
     "commit" -> commitCommand xs
-    "logs" -> logsCommand xs
+    "log" -> logCommand xs
     "cat-file" -> catFileCommand xs

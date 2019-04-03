@@ -2,6 +2,10 @@
 build:
 	stack build
 
+.PHONY: install
+install:
+	stack install
+
 .PHONY: run
 run:
 	stack run
