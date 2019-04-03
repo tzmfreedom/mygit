@@ -100,6 +100,7 @@ readTreeObjects :: String -> IO [Object]
 readTreeObjects file = do
   content <- SIO.run $ SIO.readFile (myGitDirectory ++ "/" ++ objectDirectory ++ "/" ++ file)
   let linesOfFiles = [x | x <- lines content, x /= ""]
+  Prelude.print linesOfFiles
   Prelude.mapM parseToObject linesOfFiles
 
 parseToObject :: String -> IO Object
@@ -127,9 +128,13 @@ commitCommand args = do
   currentCommitHash <- currentRef
   currentCommit <- Prelude.readFile (myGitDirectory ++ "/" ++ objectDirectory ++ "/" ++ currentCommitHash)
   let commits = lines currentCommit
-  tree <- readTreeObjects $ commits !! 0
-  let newTree = replaceTree tree tree
   objects <- readIndexObjects
+  tree <- readTreeObjects $ commits !! 0
+  Prelude.print tree
+  let newTree = L.foldl convertTree tree objects
+      convertTree tree obj = do
+        if searchTree tree obj then replaceTree tree obj
+        else appendTree tree obj
   if (L.length objects) == 0 then do
     Prelude.print "no stage object"
   else do
@@ -138,28 +143,31 @@ commitCommand args = do
     else do
       let author = args !! 0
           message = args !! 1
+      Prelude.print newTree
       treeHash <- writeTree newTree
       writeCommit treeHash author message
       clearIndex
       return ()
 
-replaceTree :: [Object] -> [Object] -> [Object]
-replaceTree tree replaceTree = do
-  L.map (replaceObject replaceTree) tree
+searchTree :: [Object] -> Object -> Bool
+searchTree tree indexedObject = do
+  L.any (\object -> objectName indexedObject == objectName object) tree
+
+appendTree :: [Object] -> Object -> [Object]
+appendTree tree indexedObject = indexedObject:tree
+
+replaceTree :: [Object] -> Object -> [Object]
+replaceTree tree indexedObject = do
+  L.map (replaceObject indexedObject) tree
   where
-    replaceObject :: [Object] -> Object -> Object
-    replaceObject replaceTree object = do
-      if inObject replaceTree (objectName object) then do
-        readObject $ objectName object
-      else object
-    inObject :: [Object] -> String -> Bool
-    inObject objects name = do
-      L.map (\o -> objectName o == name) objects
+    replaceObject :: Object -> Object -> Object
+    replaceObject indexedObject object = do
+      if objectName indexedObject == objectName object then indexedObject else object
 
 writeTree :: [Object] -> IO String
 writeTree objects = do
-  content <- B.readFile (myGitDirectory ++ "/" ++ indexFile)
-  let hash = contentHashFileName content
+  let content = pack $ encode $ L.intercalate "\n" $ L.map objectToString objects
+      hash = contentHashFileName content
   B.writeFile (myGitDirectory ++ "/" ++ objectDirectory ++ "/" ++ hash) content
   return hash
 
@@ -192,7 +200,7 @@ headFile :: String
 headFile = "refs/heads/master"
 
 currentRef :: IO String
-currentRef = Prelude.readFile (myGitDirectory ++ "/" ++ headFile)
+currentRef = SIO.run $ SIO.readFile (myGitDirectory ++ "/" ++ headFile)
 
 statusCommand :: [String] -> IO ()
 statusCommand args = do
