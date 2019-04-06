@@ -312,9 +312,10 @@ renderCommit :: Commit -> String
 renderCommit Root = ""
 renderCommit Commit{..} = do
   let commitLog = L.intercalate "\n" [
-        "commit " ++ commitHash,
+        color "yellow" ("commit " ++ commitHash),
         "Author: " ++ commitAuthor,
-        "Message: " ++ commitMessage
+        "",
+        "    " ++ commitMessage
         ]
   commitLog ++ "\n\n" ++ renderCommit commitParent
 
@@ -436,8 +437,9 @@ color c src = do
   else do
     (case c of
       "red" -> "\x1b[31m"
-      "blue" -> "\x1b[34m"
       "green" -> "\x1b[32m"
+      "yellow" -> "\x1b[33m"
+      "blue" -> "\x1b[34m"
       "bold" -> "\x1b[1m"
       ) ++ src ++ "\x1b[m"
 
