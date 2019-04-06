@@ -14,3 +14,4 @@ main = do
     "commit" -> commitCommand xs
     "log" -> logCommand xs
     "cat-file" -> catFileCommand xs
+    "tree" -> treeCommand xs

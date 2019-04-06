@@ -30,6 +30,7 @@ dependencies:
 - split
 - strict-io
 - hspec
+- pretty-show
 
 library:
   source-dirs: src

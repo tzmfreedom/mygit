@@ -9,6 +9,7 @@ module Lib
       logCommand,
       statusCommand,
       catFileCommand,
+      treeCommand,
       Object(..),
       replaceTree,
       searchTree,
@@ -25,6 +26,8 @@ import Control.Monad
 import Control.Monad.Extra
 import Codec.Binary.UTF8.String
 import System.IO.Strict as SIO
+import System.IO as IO
+import Text.Show.Pretty
 import qualified Crypto.Hash.SHA1 as SHA1
 
 data Object = Object{
@@ -110,7 +113,6 @@ readTreeObjects :: String -> IO [Object]
 readTreeObjects file = do
   content <- SIO.run $ SIO.readFile (myGitDirectory ++ "/" ++ objectDirectory ++ "/" ++ file)
   let linesOfFiles = [x | x <- lines content, x /= ""]
-  Prelude.print linesOfFiles
   Prelude.mapM parseToObject linesOfFiles
 
 parseToObject :: String -> IO Object
@@ -143,21 +145,24 @@ calculateHash tree = do
 commitCommand :: [String] -> IO ()
 commitCommand args = do
   currentCommitHash <- currentRef
-  currentCommit <- Prelude.readFile (myGitDirectory ++ "/" ++ objectDirectory ++ "/" ++ currentCommitHash)
-  let commits = lines currentCommit
-  tree <- readTreeObjects $ commits !! 0
+  tree <- if currentCommitHash /= "" then do
+    currentCommit <- Prelude.readFile (myGitDirectory ++ "/" ++ objectDirectory ++ "/" ++ currentCommitHash)
+    let commits = lines currentCommit
+    readTreeObjects $ commits !! 0
+  else return []
   objects <- readIndexObjects
-  Prelude.print tree
+  pPrint tree
   newTree <- foldM convertTree tree objects
+  mapM writeTree' newTree
   if (L.length objects) == 0 then do
-    Prelude.print "no stage object"
+    IO.hPrint IO.stderr "no stage object"
   else do
     if (L.length args /= 2) then do
-      Prelude.print "argument number should be 2"
+      IO.hPrint IO.stderr "argument number should be 2"
     else do
       let author = args !! 0
           message = args !! 1
-      Prelude.print newTree
+      pPrint newTree
       treeHash <- writeTree newTree
       writeCommit treeHash author message
       clearIndex
@@ -214,7 +219,17 @@ createTree indexedObject (path:paths) = do
     objectChildren = [createTree indexedObject paths],
     objectPerm = [7, 5, 5]
     }
-  newTree{objectHash = calculateHash $ objectChildren newTree}
+  let newHash = calculateHash $ objectChildren newTree
+  newTree{objectHash = newHash}
+
+writeTree' :: Object -> IO ()
+writeTree' object
+  | objectType object == "file" = return ()
+  | objectType object == "tree" = do
+    let file = myGitDirectory ++ "/" ++ objectDirectory ++ "/" ++ objectHash object
+    ifM (doesFileExist file) (return ()) $ do
+      writeTree $ objectChildren object
+      return ()
 
 writeTree :: [Object] -> IO String
 writeTree objects = do
@@ -230,7 +245,7 @@ writeCommit treeHash author message = do
     parentCommit <- Prelude.readFile (myGitDirectory ++ "/" ++ objectDirectory ++ "/" ++ parentCommitHash)
     let commits = lines parentCommit
     if commits !! 0 == treeHash then do
-      Prelude.print "same commit"
+      IO.hPrint IO.stderr "same commit"
       return ()
     else do
       let content = L.intercalate "\n" [treeHash, parentCommitHash, author, message]
@@ -256,7 +271,7 @@ currentRef = SIO.run $ SIO.readFile (myGitDirectory ++ "/" ++ headFile)
 
 statusCommand :: [String] -> IO ()
 statusCommand args = do
-  Prelude.print =<< readIndexObjects
+  pPrint =<< readIndexObjects
 
 logCommand :: [String] -> IO ()
 logCommand args = do
@@ -301,3 +316,11 @@ renderCommit Commit{..} = do
         "Message: " ++ commitMessage
         ]
   commitLog ++ "\n\n" ++ renderCommit commitParent
+
+treeCommand :: [String] -> IO ()
+treeCommand args = do
+  currentCommitHash <- currentRef
+  currentCommit <- Prelude.readFile (myGitDirectory ++ "/" ++ objectDirectory ++ "/" ++ currentCommitHash)
+  let commits = lines currentCommit
+  tree <- readTreeObjects $ commits !! 0
+  pPrint tree
