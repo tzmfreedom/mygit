@@ -15,3 +15,4 @@ main = do
     "log" -> logCommand xs
     "cat-file" -> catFileCommand xs
     "tree" -> treeCommand xs
+    "diff" -> diffCommand xs

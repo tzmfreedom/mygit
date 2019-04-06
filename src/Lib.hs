@@ -10,6 +10,7 @@ module Lib
       statusCommand,
       catFileCommand,
       treeCommand,
+      diffCommand,
       Object(..),
       replaceTree,
       searchTree,
@@ -61,13 +62,18 @@ objectDirectory = "objects"
 indexFile :: String
 indexFile = "index"
 
+headFile :: String
+headFile = "refs/heads/master"
+
 initCommand :: [String] -> IO ()
 initCommand args = do
   ifM (doesDirectoryExist myGitDirectory) (removeDirectory myGitDirectory) (return ())
   createDirectory myGitDirectory
   createDirectory $ myGitDirectory ++ "/" ++ objectDirectory
   createDirectory $ myGitDirectory ++ "/" ++ refsDirectory
+  createDirectory $ myGitDirectory ++ "/" ++ refsDirectory ++ "/heads"
   B.writeFile (myGitDirectory ++ "/" ++ indexFile) ""
+  B.writeFile (myGitDirectory ++ "/" ++ refsDirectory ++ "/heads/master") ""
 
 addCommand :: [String] -> IO ()
 addCommand args = do
@@ -95,7 +101,7 @@ addObjectToIndex objects file content = do
 writeObjectsToIndex :: [Object] -> IO ()
 writeObjectsToIndex objects = do
   Prelude.writeFile (myGitDirectory ++ "/" ++ indexFile) content
-  where content = L.intercalate "\n" (Prelude.map objectToString objects)
+  where content = "blob\n" ++ L.intercalate "\n" (Prelude.map objectToString objects)
 
 objectToString :: Object -> String
 objectToString o = do
@@ -233,9 +239,10 @@ writeTree' object
 
 writeTree :: [Object] -> IO String
 writeTree objects = do
-  let content = pack $ encode $ L.intercalate "\n" $ L.map objectToString objects
-      hash = contentHashFileName content
-  B.writeFile (myGitDirectory ++ "/" ++ objectDirectory ++ "/" ++ hash) content
+  let content = "tree\n" ++ (L.intercalate "\n" $ L.map objectToString objects)
+      encodedContent = pack $ encode content
+      hash = contentHashFileName encodedContent
+  B.writeFile (myGitDirectory ++ "/" ++ objectDirectory ++ "/" ++ hash) encodedContent
   return hash
 
 writeCommit :: String -> String -> String -> IO ()
@@ -248,13 +255,13 @@ writeCommit treeHash author message = do
       IO.hPrint IO.stderr "same commit"
       return ()
     else do
-      let content = L.intercalate "\n" [treeHash, parentCommitHash, author, message]
+      let content = "commit\n" ++ L.intercalate "\n" [treeHash, parentCommitHash, author, message]
           commitHash = contentHashFileName $ pack $ encode content
       Prelude.writeFile (myGitDirectory ++ "/" ++ objectDirectory ++ "/" ++ commitHash) content
       Prelude.writeFile (myGitDirectory ++ "/" ++ headFile) commitHash
       return ()
   else do
-    let content = L.intercalate "\n" [treeHash, "", author, message]
+    let content = "commit\n" ++ L.intercalate "\n" [treeHash, "", author, message]
         commitHash = contentHashFileName $ pack $ encode content
     Prelude.writeFile (myGitDirectory ++ "/" ++ objectDirectory ++ "/" ++ commitHash) content
     Prelude.writeFile (myGitDirectory ++ "/" ++ headFile) commitHash
@@ -262,9 +269,6 @@ writeCommit treeHash author message = do
 
 clearIndex :: IO ()
 clearIndex = Prelude.writeFile (myGitDirectory ++ "/" ++ indexFile) ""
-
-headFile :: String
-headFile = "refs/heads/master"
 
 currentRef :: IO String
 currentRef = SIO.run $ SIO.readFile (myGitDirectory ++ "/" ++ headFile)
@@ -298,11 +302,6 @@ readCommitHash commitHash = do
       commitParent = parentCommit
     }
 
---  tree <- Prelude.readFile (myGitDirectory ++ "/" ++ objectDirectory ++ "/" ++ treeHash)
---  -- TODO: duplicate code
---  let linesOfFiles = lines tree
---  return (Prelude.map parseToObject linesOfFiles)
-
 catFileCommand :: [String] -> IO ()
 catFileCommand args = do
   Prelude.putStrLn =<< Prelude.readFile (myGitDirectory ++ "/" ++ objectDirectory ++ "/" ++ (args !! 0))
@@ -324,3 +323,100 @@ treeCommand args = do
   let commits = lines currentCommit
   tree <- readTreeObjects $ commits !! 0
   pPrint tree
+
+resetCommand :: [String] -> IO ()
+resetCommand args = do
+  let hash = args !! 0
+  content <- Prelude.readFile (myGitDirectory ++ "/" ++ objectDirectory ++ "/" ++ hash)
+  let contentType = commitLines !! 0
+      commitLines = lines content
+  if contentType == "commit" then do
+    Prelude.writeFile (myGitDirectory ++ "/" ++ headFile) hash
+  else IO.hPrint IO.stderr ("object type shoule be commit, but " ++ contentType)
+
+diffCommand :: [String] -> IO ()
+diffCommand args = do
+  let one = args !! 0
+      another = args !! 1
+  currentCommitHash <- currentRef
+  oneTree <- do
+    oneCommit <- Prelude.readFile (myGitDirectory ++ "/" ++ objectDirectory ++ "/" ++ one)
+    readTreeObjects $ (lines oneCommit) !! 0
+  anotherTree <- do
+    anotherCommit <- Prelude.readFile (myGitDirectory ++ "/" ++ objectDirectory ++ "/" ++ another)
+    readTreeObjects $ (lines anotherCommit) !! 0
+  pPrint oneTree
+  pPrint anotherTree
+  pPrint $ diff "." oneTree anotherTree
+
+data Diff = Diff{
+  diffFile :: String,
+  diffType :: String,
+  diffBefore :: String,
+  diffAfter :: String
+} deriving (Show, Eq)
+
+-- one > another
+diff :: String -> [Object] -> [Object] -> [Diff]
+diff path one another = do
+  one >>= (diff' another path)
+  where
+    diff' :: [Object] -> String -> Object -> [Diff]
+    diff' objects path obj = do
+      let objName = objectName obj
+          target = L.find (\x -> objName == objectName x) objects
+      if objectType obj == "file" then do
+        createFileDiff path target obj
+      else createTreeDiff path target obj
+    createFileDiff :: String -> Maybe Object -> Object -> [Diff]
+    createFileDiff path Nothing obj = do
+      [
+        Diff{
+          diffFile = path ++ "/" ++ objectName obj,
+          diffType = "add",
+          diffBefore = "",
+          diffAfter = objectHash obj
+          }
+        ]
+    createFileDiff path (Just target) obj
+      | objectHash obj /= objectHash target = do
+        [
+          Diff {
+            diffFile = path ++ "/" ++ objectName obj,
+            diffType = "update",
+            diffBefore = objectHash target,
+            diffAfter = objectHash obj
+            }
+          ]
+      | otherwise = []
+    createTreeDiff :: String -> Maybe Object -> Object -> [Diff]
+    createTreeDiff path Nothing obj = do
+      [
+        Diff{
+          diffFile = path ++ "/" ++ objectName obj,
+          diffType = "add",
+          diffBefore = "",
+          diffAfter = objectHash obj
+          }
+        ]
+    createTreeDiff path (Just target) obj
+      | objectHash obj /= objectHash target = do
+        diff (path ++ "/" ++ objectName obj) (objectChildren obj) (objectChildren target)
+      | otherwise = []
+
+
+--  newTree <- foldM convertTree tree objects
+--  mapM writeTree' newTree
+--  if (L.length objects) == 0 then do
+--    IO.hPrint IO.stderr "no stage object"
+--  else do
+--    if (L.length args /= 2) then do
+--      IO.hPrint IO.stderr "argument number should be 2"
+--    else do
+--      let author = args !! 0
+--          message = args !! 1
+--      pPrint newTree
+--      treeHash <- writeTree newTree
+--      writeCommit treeHash author message
+--      clearIndex
+--      return ()
