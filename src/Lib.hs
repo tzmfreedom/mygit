@@ -9,13 +9,19 @@ module Lib
       logCommand,
       statusCommand,
       catFileCommand,
+      Object(..),
+      replaceTree,
+      searchTree,
+      searchFile,
     ) where
 
 import Data.ByteString as B
 import Data.Hex
+import Data.Maybe
 import Data.List as L
 import Data.List.Split
 import System.Directory
+import Control.Monad
 import Control.Monad.Extra
 import Codec.Binary.UTF8.String
 import System.IO.Strict as SIO
@@ -27,14 +33,18 @@ data Object = Object{
   objectHash :: String,
   objectName :: String,
   objectChildren :: [Object]
-} deriving Show
+} deriving (Show, Eq)
 
 data Commit = Commit{
   commitAuthor :: String,
   commitMessage :: String,
   commitHash :: String,
   commitParent :: Commit
-} | Root deriving Show
+} | Root deriving (Show, Eq)
+
+-- append
+--   createTree * N
+--   createFile or replaceFile
 
 myGitDirectory :: String
 myGitDirectory = ".mygit"
@@ -109,7 +119,7 @@ parseToObject content = do
       perm :: String -> [Int]
       perm p = Prelude.map (Prelude.read . pure :: Char -> Int) p
       objectType = cols !! 1
-  objectChildren <- if objectType == "Tree" then readTreeObjects $ cols !! 2 else return []
+  objectChildren <- if objectType == "tree" then readTreeObjects $ cols !! 2 else return []
   return Object{
     objectPerm = perm (cols !! 0),
     objectType = cols !! 1,
@@ -121,6 +131,13 @@ parseToObject content = do
 contentHashFileName :: ByteString -> String
 contentHashFileName content = decode $ unpack $ hex $ SHA1.hash content
 
+calculateHash :: [Object] -> String
+calculateHash tree = do
+  decode $ unpack $ hex $ SHA1.hash $ pack $ encode (L.intercalate "\n" $ treeString tree)
+  where
+    treeString :: [Object] -> [String]
+    treeString = L.map objectToString
+
 ---
 
 commitCommand :: [String] -> IO ()
@@ -128,13 +145,10 @@ commitCommand args = do
   currentCommitHash <- currentRef
   currentCommit <- Prelude.readFile (myGitDirectory ++ "/" ++ objectDirectory ++ "/" ++ currentCommitHash)
   let commits = lines currentCommit
-  objects <- readIndexObjects
   tree <- readTreeObjects $ commits !! 0
+  objects <- readIndexObjects
   Prelude.print tree
-  let newTree = L.foldl convertTree tree objects
-      convertTree tree obj = do
-        if searchTree tree obj then replaceTree tree obj
-        else appendTree tree obj
+  newTree <- foldM convertTree tree objects
   if (L.length objects) == 0 then do
     Prelude.print "no stage object"
   else do
@@ -148,21 +162,59 @@ commitCommand args = do
       writeCommit treeHash author message
       clearIndex
       return ()
-
-searchTree :: [Object] -> Object -> Bool
-searchTree tree indexedObject = do
-  L.any (\object -> objectName indexedObject == objectName object) tree
-
-appendTree :: [Object] -> Object -> [Object]
-appendTree tree indexedObject = indexedObject:tree
-
-replaceTree :: [Object] -> Object -> [Object]
-replaceTree tree indexedObject = do
-  L.map (replaceObject indexedObject) tree
   where
-    replaceObject :: Object -> Object -> Object
-    replaceObject indexedObject object = do
-      if objectName indexedObject == objectName object then indexedObject else object
+    convertTree :: [Object] -> Object -> IO [Object]
+    convertTree tree obj = do
+      let filePaths = splitOn "/" (objectName obj)
+      return (replaceTree tree obj filePaths)
+
+searchTree :: String -> [Object] -> Bool
+searchTree path = L.any (\x -> objectType x == "tree" && objectName x == path)
+searchFile :: String -> [Object] -> Bool
+searchFile path = L.any (\x -> objectType x == "file" && objectName x == path)
+
+appendTree :: [Object] -> Object -> [String] -> [Object]
+appendTree tree indexedObject (path:paths) = do
+  if objectType indexedObject == "file" then indexedObject:tree
+  else [] -- searchTree tree indexedObject
+
+replaceTree :: [Object] -> Object -> [String] -> [Object]
+replaceTree tree indexedObject p@(path:paths) = do
+  -- file
+  if L.length paths == 0 then do
+    if searchFile path tree then do
+      L.map (replaceObject indexedObject p) tree
+    else indexedObject{objectName = path}:tree
+  -- tree
+  else do
+    -- calculate hash
+    if searchTree path tree then do
+      L.map (replaceObject indexedObject p) tree
+    else do
+    -- create tree
+      (createTree indexedObject p):tree
+  where
+    replaceObject :: Object -> [String] -> Object -> Object
+    replaceObject indexedObject (path:paths) object
+      | objectType object == "file" = do
+        if path == objectName object then indexedObject{objectName = path} else object
+      | objectType object == "tree" = do
+        if path == objectName object then do
+          let newTree = replaceTree (objectChildren object) indexedObject paths
+          object{objectHash = calculateHash newTree, objectChildren = newTree}
+        else object
+
+createTree :: Object -> [String] -> Object
+createTree indexedObject (path:[]) = indexedObject{objectName = path}
+createTree indexedObject (path:paths) = do
+  let newTree = Object{
+    objectName = path,
+    objectHash = "",
+    objectType = "tree",
+    objectChildren = [createTree indexedObject paths],
+    objectPerm = [7, 5, 5]
+    }
+  newTree{objectHash = calculateHash $ objectChildren newTree}
 
 writeTree :: [Object] -> IO String
 writeTree objects = do

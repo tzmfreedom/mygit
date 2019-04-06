@@ -29,6 +29,7 @@ dependencies:
 - utf8-string
 - split
 - strict-io
+- hspec
 
 library:
   source-dirs: src
