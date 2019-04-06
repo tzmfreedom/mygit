@@ -1,6 +1,7 @@
 module Main where
 
 import System.Environment
+import System.IO
 import Lib
 
 main :: IO ()
@@ -16,3 +17,4 @@ main = do
     "cat-file" -> catFileCommand xs
     "tree" -> treeCommand xs
     "diff" -> diffCommand xs
+    otherwise -> hPutStrLn stderr $ "no such command: " ++ x
