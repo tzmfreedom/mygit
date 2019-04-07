@@ -46,9 +46,12 @@ data Commit = Commit{
   commitParent :: Commit
 } | Root deriving (Show, Eq)
 
--- append
---   createTree * N
---   createFile or replaceFile
+data Diff = Diff{
+  diffFile :: String,
+  diffType :: String,
+  diffBefore :: String,
+  diffAfter :: String
+} deriving (Show, Eq)
 
 myGitDirectory :: String
 myGitDirectory = ".mygit"
@@ -65,6 +68,9 @@ indexFile = "index"
 headFile :: String
 headFile = "refs/heads/master"
 
+objectFilePath :: String -> String
+objectFilePath file = myGitDirectory ++ "/" ++ objectDirectory ++ "/" ++ file
+
 initCommand :: [String] -> IO ()
 initCommand args = do
   ifM (doesDirectoryExist myGitDirectory) (removeDirectory myGitDirectory) (return ())
@@ -79,7 +85,7 @@ addCommand :: [String] -> IO ()
 addCommand args = do
   let file = args !! 0
   content <- B.readFile file
-  B.writeFile (myGitDirectory ++ "/" ++ objectDirectory ++ "/" ++ (contentHashFileName content)) content
+  B.writeFile (objectFilePath $ contentHashFileName content) content
   writeIndex file content
 
 writeIndex :: String -> ByteString -> IO ()
@@ -91,7 +97,7 @@ addObjectToIndex :: [Object] -> String -> ByteString -> IO ()
 addObjectToIndex objects file content = do
   writeObjectsToIndex (object:objects)
   where object = Object{
-    objectPerm = [7,5,5],
+    objectPerm = [6, 4, 4],
     objectType = "file",
     objectHash = contentHashFileName content,
     objectName = file,
@@ -116,16 +122,14 @@ readIndexObjects = do
   Prelude.mapM parseToObject linesOfFiles
 
 readTreeObjects :: String -> IO [Object]
-readTreeObjects file = do
-  content <- SIO.run $ SIO.readFile (myGitDirectory ++ "/" ++ objectDirectory ++ "/" ++ file)
+readTreeObjects treeHash = do
+  content <- SIO.run $ SIO.readFile $ objectFilePath treeHash
   let _:linesOfFiles = [x | x <- lines content, x /= ""]
   Prelude.mapM parseToObject linesOfFiles
 
 parseToObject :: String -> IO Object
 parseToObject content = do
   let cols = splitOn " " content
-      perm :: String -> [Int]
-      perm p = Prelude.map (Prelude.read . pure :: Char -> Int) p
       objectType = cols !! 1
   objectChildren <- if objectType == "tree" then readTreeObjects $ cols !! 2 else return []
   return Object{
@@ -135,6 +139,9 @@ parseToObject content = do
     objectName = cols !! 3,
     objectChildren = objectChildren
     }
+  where
+    perm :: String -> [Int]
+    perm p = Prelude.map (Prelude.read . pure :: Char -> Int) p
 
 contentHashFileName :: ByteString -> String
 contentHashFileName content = decode $ unpack $ hex $ SHA1.hash content
@@ -146,18 +153,15 @@ calculateHash tree = do
     treeString :: [Object] -> [String]
     treeString = L.map objectToString
 
----
-
 commitCommand :: [String] -> IO ()
 commitCommand args = do
   currentCommitHash <- currentRef
   tree <- if currentCommitHash /= "" then do
-    currentCommit <- Prelude.readFile (myGitDirectory ++ "/" ++ objectDirectory ++ "/" ++ currentCommitHash)
+    currentCommit <- Prelude.readFile $ objectFilePath currentCommitHash
     let _:commits = lines currentCommit
     readTreeObjects $ commits !! 0
   else return []
   objects <- readIndexObjects
---  pPrint tree
   if (L.length objects) == 0 then do
     IO.hPrint IO.stderr "no stage object"
   else do
@@ -166,7 +170,6 @@ commitCommand args = do
     else do
       let author = args !! 0
           message = args !! 1
---      pPrint newTree
       newTree <- foldM convertTree tree objects
       mapM writeTree' newTree
       treeHash <- writeTree newTree
@@ -198,11 +201,9 @@ replaceTree tree indexedObject p@(path:paths) = do
     else indexedObject{objectName = path}:tree
   -- tree
   else do
-    -- calculate hash
     if searchTree path tree then do
       L.map (replaceObject indexedObject p) tree
     else do
-    -- create tree
       (createTree indexedObject p):tree
   where
     replaceObject :: Object -> [String] -> Object -> Object
@@ -229,29 +230,29 @@ createTree indexedObject (path:paths) = do
   newTree{objectHash = newHash}
 
 writeTree' :: Object -> IO ()
-writeTree' object
-  | objectType object == "file" = return ()
-  | objectType object == "tree" = do
-    IO.print $ objectHash object
-    let file = myGitDirectory ++ "/" ++ objectDirectory ++ "/" ++ objectHash object
+writeTree' treeObject
+  | objectType treeObject == "file" = return ()
+  | objectType treeObject == "tree" = do
+    let file = objectFilePath $ objectHash treeObject
     ifM (doesFileExist file) (return ()) $ do
-      writeTree $ objectChildren object
-      return ()
+      newHash <- writeTree $ objectChildren treeObject
+      if newHash /= objectHash treeObject then do
+        IO.hPrint IO.stderr "tree hash not match"
+      else return ()
 
 writeTree :: [Object] -> IO String
 writeTree objects = do
   let content = "tree\n" ++ (L.intercalate "\n" $ L.map objectToString objects)
       encodedContent = pack $ encode content
       hash = contentHashFileName encodedContent
-  IO.print hash
-  B.writeFile (myGitDirectory ++ "/" ++ objectDirectory ++ "/" ++ hash) encodedContent
+  B.writeFile (objectFilePath hash) encodedContent
   return hash
 
 writeCommit :: String -> String -> String -> IO ()
 writeCommit treeHash author message = do
   parentCommitHash <- currentRef
   if parentCommitHash /= "" then do
-    parentCommit <- Prelude.readFile (myGitDirectory ++ "/" ++ objectDirectory ++ "/" ++ parentCommitHash)
+    parentCommit <- Prelude.readFile $ objectFilePath parentCommitHash
     let commits = lines parentCommit
     if commits !! 0 == treeHash then do
       IO.hPrint IO.stderr "same commit"
@@ -259,13 +260,13 @@ writeCommit treeHash author message = do
     else do
       let content = "commit\n" ++ L.intercalate "\n" [treeHash, parentCommitHash, author, message]
           commitHash = contentHashFileName $ pack $ encode content
-      Prelude.writeFile (myGitDirectory ++ "/" ++ objectDirectory ++ "/" ++ commitHash) content
+      Prelude.writeFile (objectFilePath commitHash) content
       Prelude.writeFile (myGitDirectory ++ "/" ++ headFile) commitHash
       return ()
   else do
     let content = "commit\n" ++ L.intercalate "\n" [treeHash, "", author, message]
         commitHash = contentHashFileName $ pack $ encode content
-    Prelude.writeFile (myGitDirectory ++ "/" ++ objectDirectory ++ "/" ++ commitHash) content
+    Prelude.writeFile (objectFilePath commitHash) content
     Prelude.writeFile (myGitDirectory ++ "/" ++ headFile) commitHash
     return ()
 
@@ -290,7 +291,7 @@ readCommitHash commitHash = do
   if commitHash == "" then do
     return Root
   else do
-    commit <- Prelude.readFile (myGitDirectory ++ "/" ++ objectDirectory ++ "/" ++ commitHash)
+    commit <- Prelude.readFile $ objectFilePath commitHash
     let _:commitLines = lines commit
         treeHash = commitLines !! 0
         parentHash = commitLines !! 1
@@ -306,7 +307,7 @@ readCommitHash commitHash = do
 
 catFileCommand :: [String] -> IO ()
 catFileCommand args = do
-  Prelude.putStrLn =<< Prelude.readFile (myGitDirectory ++ "/" ++ objectDirectory ++ "/" ++ (args !! 0))
+  Prelude.putStrLn =<< Prelude.readFile (objectFilePath $ args !! 0)
 
 renderCommit :: Commit -> String
 renderCommit Root = ""
@@ -322,7 +323,7 @@ renderCommit Commit{..} = do
 treeCommand :: [String] -> IO ()
 treeCommand args = do
   currentCommitHash <- if L.length args == 0 then currentRef else return (args !! 0)
-  currentCommit <- Prelude.readFile (myGitDirectory ++ "/" ++ objectDirectory ++ "/" ++ currentCommitHash)
+  currentCommit <- Prelude.readFile $ objectFilePath currentCommitHash
   let _:commits = lines currentCommit
   tree <- readTreeObjects $ commits !! 0
   mapM (printTree "") tree
@@ -332,7 +333,7 @@ treeCommand args = do
 resetCommand :: [String] -> IO ()
 resetCommand args = do
   let hash = args !! 0
-  content <- Prelude.readFile (myGitDirectory ++ "/" ++ objectDirectory ++ "/" ++ hash)
+  content <- Prelude.readFile $ objectFilePath hash
   let contentType = commitLines !! 0
       commitLines = lines content
   if contentType == "commit" then do
@@ -345,22 +346,13 @@ diffCommand args = do
       another = args !! 1
   currentCommitHash <- currentRef
   oneTree <- do
-    oneCommit <- Prelude.readFile (myGitDirectory ++ "/" ++ objectDirectory ++ "/" ++ one)
+    oneCommit <- Prelude.readFile $ objectFilePath one
     readTreeObjects $ (lines oneCommit) !! 0
   anotherTree <- do
-    anotherCommit <- Prelude.readFile (myGitDirectory ++ "/" ++ objectDirectory ++ "/" ++ another)
+    anotherCommit <- Prelude.readFile $ objectFilePath another
     readTreeObjects $ (lines anotherCommit) !! 0
---  pPrint oneTree
---  pPrint anotherTree
   mapM printDiff $ diff "." oneTree anotherTree
   return ()
-
-data Diff = Diff{
-  diffFile :: String,
-  diffType :: String,
-  diffBefore :: String,
-  diffAfter :: String
-} deriving (Show, Eq)
 
 -- one > another
 diff :: String -> [Object] -> [Object] -> [Diff]
@@ -423,12 +415,12 @@ printDiff diff = do
     diffContent :: Diff -> IO String
     diffContent diff
       | diffType diff == "add" = do
-        content <- SIO.run $ SIO.readFile (myGitDirectory ++ "/" ++ objectDirectory ++ "/" ++ diffAfter diff)
-        return (color "green" content)
+        content <- SIO.run $ SIO.readFile $ objectFilePath $ diffAfter diff
+        return $ color "green" content
       | diffType diff == "update" = do
-        before <- Prelude.readFile (myGitDirectory ++ "/" ++ objectDirectory ++ "/" ++ diffBefore diff)
-        after <- Prelude.readFile (myGitDirectory ++ "/" ++ objectDirectory ++ "/" ++ diffAfter diff)
-        return (color "red" before ++ "\n" ++ color "green" after)
+        before <- Prelude.readFile $ objectFilePath $ diffBefore diff
+        after <- Prelude.readFile $ objectFilePath $ diffAfter diff
+        return $ color "red" before ++ "\n" ++ color "green" after
 
 color :: String -> String -> String
 color c src = do
@@ -451,19 +443,3 @@ printTree indent obj
     IO.putStrLn $ color "bold" (indent ++ objectName obj ++ "/")
     mapM (printTree (indent ++ "  ")) (objectChildren obj)
     return ()
-
---  newTree <- foldM convertTree tree objects
---  mapM writeTree' newTree
---  if (L.length objects) == 0 then do
---    IO.hPrint IO.stderr "no stage object"
---  else do
---    if (L.length args /= 2) then do
---      IO.hPrint IO.stderr "argument number should be 2"
---    else do
---      let author = args !! 0
---          message = args !! 1
---      pPrint newTree
---      treeHash <- writeTree newTree
---      writeCommit treeHash author message
---      clearIndex
---      return ()
