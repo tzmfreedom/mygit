@@ -32,6 +32,8 @@ dependencies:
 - hspec
 - pretty-show
 - hlint
+- yaml
+- aeson
 
 library:
   source-dirs: src

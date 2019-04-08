@@ -1,6 +1,7 @@
 {-# LANGUAGE OverloadedStrings #-}
 {-# LANGUAGE RecordWildCards #-}
 {-# LANGUAGE NamedFieldPuns #-}
+{-# LANGUAGE TemplateHaskell #-}
 
 module Lib
     ( initCommand,
@@ -20,20 +21,25 @@ module Lib
       searchFile,
     ) where
 
-import Data.ByteString as B
+import Data.ByteString as B(readFile, writeFile, ByteString(..), pack, unpack)
 import Data.Hex
 import Data.Maybe
+import Data.Either
 import Data.List as L
 import Data.List.Split
+import Data.Aeson.TH(deriveJSON, defaultOptions, Options(..))
+import Data.Yaml(decodeFileEither, encodeFile, ParseException(..))
 import System.Directory
 import Control.Monad
 import Control.Monad.Extra
 import Codec.Binary.UTF8.String
-import System.IO.Strict as SIO
+import System.IO.Strict as SIO(readFile, run)
 import System.IO as IO
 import Text.Read as R
 import Text.Show.Pretty
 import qualified Crypto.Hash.SHA1 as SHA1
+import GHC.Generics
+import Util
 
 data Object = Object{
   objectPerm :: [Int],
@@ -57,6 +63,16 @@ data Diff = Diff{
   diffAfter :: String
 } deriving (Show, Eq)
 
+data Config = Config{
+  configAuthor :: Maybe String,
+  configRemotes :: [Remote]
+} deriving (Show, Eq)
+
+data Remote = Remote{
+  remoteUrl :: String,
+  remoteName :: String
+} deriving (Show, Eq)
+
 myGitDirectory :: String
 myGitDirectory = ".mygit"
 
@@ -74,6 +90,9 @@ headsDirectory = "heads"
 
 indexFile :: String
 indexFile = "index"
+
+configFile :: String
+configFile = "config"
 
 headFile :: String
 headFile = "HEAD"
@@ -95,6 +114,7 @@ initCommand args = do
   createDirectory $ myGitDirectory ++ "/" ++ refsDirectory
   createDirectory $ myGitDirectory ++ "/" ++ refsDirectory ++ "/" ++ headsDirectory
   createDirectory $ myGitDirectory ++ "/" ++ refsDirectory ++ "/" ++ tagsDirectory
+  IO.writeFile (myGitDirectory ++ "/" ++ configFile) "remotes: []"
   IO.writeFile (myGitDirectory ++ "/" ++ indexFile) ""
   IO.writeFile (myGitDirectory ++ "/" ++ headFile) (refsDirectory ++ "/" ++ headsDirectory ++ "/" ++ masterBranchName)
   IO.writeFile (myGitDirectory ++ "/" ++ refsDirectory ++ "/" ++ headsDirectory ++ "/" ++ masterBranchName) ""
@@ -510,3 +530,63 @@ tagCommand args =
         currentCommitHash <- IO.readFile $ myGitDirectory ++ "/" ++ ref
         IO.writeFile tagFileName currentCommitHash
 
+configCommand :: [String] -> IO ()
+configCommand args
+  | L.null args = do
+    config <- decodeFileEither $ myGitDirectory ++ "/" ++ configFile
+    printConfig config
+  | L.length args == 2 = do
+    config <- decodeFileEither $ myGitDirectory ++ "/" ++ configFile
+    let name = L.head args
+        value = args !! 1
+        newConfig = setConfig config name value
+    encodeFile (myGitDirectory ++ "/" ++ configFile) newConfig
+  | otherwise = hPutStrLn stderr "arguments should be 0 or 2"
+
+printConfig :: Either ParseException Config -> IO ()
+printConfig (Left err) = hPrint stderr err
+printConfig (Right config) = do
+  let author = configAuthor config
+  maybe (return ()) IO.putStrLn author
+  mapM_ printRemote $ configRemotes config
+
+printRemote :: Remote -> IO ()
+printRemote remote = IO.putStrLn $ remoteName remote ++ " => " ++ remoteUrl remote
+
+setConfig :: Either ParseException Config -> String -> String -> Config
+setConfig (Left err) name value
+  | name == "author" = Config{configAuthor = Just value, configRemotes = []}
+  | otherwise = Config{configAuthor = Nothing, configRemotes = []}
+setConfig (Right config) name value
+  | name == "author" = config{configAuthor = Just value}
+  | otherwise = config
+
+remoteCommand :: [String] -> IO ()
+remoteCommand args
+  | null args = do
+    config <- decodeFileEither $ myGitDirectory ++ "/" ++ configFile
+    if isLeft config then do
+      let Left err = config
+      hPrint stderr err
+    else do
+      let Right right = config
+      mapM_ printRemote $ configRemotes right
+  | length args == 2 = do
+    configEither <- decodeFileEither $ myGitDirectory ++ "/" ++ configFile
+    if isLeft configEither then do
+      let Left err = configEither
+      hPrint stderr err
+    else do
+      let name = head args
+          url = args !! 1
+          Right config = configEither
+          remotes = configRemotes config
+          newRemotes = if any (\c -> remoteName c == name) remotes then
+            map (\r -> if remoteName r == name then r{remoteUrl = url} else r) remotes
+          else
+            Remote{remoteName = name, remoteUrl = url}:remotes
+      encodeFile (myGitDirectory ++ "/" ++ configFile) config{configRemotes = newRemotes}
+  | otherwise = hPutStrLn stderr "arguments should be 0 or 2"
+
+deriveJSON defaultOptions { fieldLabelModifier = firstLower . drop 6 } ''Config
+deriveJSON defaultOptions { fieldLabelModifier = firstLower . drop 6 } ''Remote
