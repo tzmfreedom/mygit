@@ -19,4 +19,5 @@ main = do
     "diff" -> diffCommand xs
     "branch" -> branchCommand xs
     "checkout" -> checkoutCommand xs
+    "tag" -> tagCommand xs
     otherwise -> hPutStrLn stderr $ "no such command: " ++ x

@@ -13,6 +13,7 @@ module Lib
       diffCommand,
       branchCommand,
       checkoutCommand,
+      tagCommand,
       Object(..),
       replaceTree,
       searchTree,
@@ -65,6 +66,12 @@ refsDirectory = "refs"
 objectDirectory :: String
 objectDirectory = "objects"
 
+tagsDirectory :: String
+tagsDirectory = "tags"
+
+headsDirectory :: String
+headsDirectory = "heads"
+
 indexFile :: String
 indexFile = "index"
 
@@ -78,7 +85,7 @@ objectFilePath :: String -> String
 objectFilePath file = myGitDirectory ++ "/" ++ objectDirectory ++ "/" ++ file
 
 branchFilePath :: String -> String
-branchFilePath branchName = myGitDirectory ++ "/" ++ refsDirectory ++ "/heads/" ++ branchName
+branchFilePath branchName = myGitDirectory ++ "/" ++ refsDirectory ++ "/" ++ headsDirectory ++ "/" ++ branchName
 
 initCommand :: [String] -> IO ()
 initCommand args = do
@@ -86,14 +93,15 @@ initCommand args = do
   createDirectory myGitDirectory
   createDirectory $ myGitDirectory ++ "/" ++ objectDirectory
   createDirectory $ myGitDirectory ++ "/" ++ refsDirectory
-  createDirectory $ myGitDirectory ++ "/" ++ refsDirectory ++ "/heads"
+  createDirectory $ myGitDirectory ++ "/" ++ refsDirectory ++ "/" ++ headsDirectory
+  createDirectory $ myGitDirectory ++ "/" ++ refsDirectory ++ "/" ++ tagsDirectory
   IO.writeFile (myGitDirectory ++ "/" ++ indexFile) ""
-  IO.writeFile (myGitDirectory ++ "/" ++ headFile) (refsDirectory ++ "/heads/master")
-  IO.writeFile (myGitDirectory ++ "/" ++ refsDirectory ++ "/heads/master") ""
+  IO.writeFile (myGitDirectory ++ "/" ++ headFile) (refsDirectory ++ "/" ++ headsDirectory ++ "/" ++ masterBranchName)
+  IO.writeFile (myGitDirectory ++ "/" ++ refsDirectory ++ "/" ++ headsDirectory ++ "/" ++ masterBranchName) ""
 
 addCommand :: [String] -> IO ()
 addCommand args = do
-  let file = args !! 0
+  let file = L.head args
   content <- B.readFile file
   B.writeFile (objectFilePath $ contentHashFileName content) content
   writeIndex file content
@@ -104,7 +112,7 @@ writeIndex file content = do
   unless (L.any (\x -> file == objectName x) objects) (addObjectToIndex objects file content)
 
 addObjectToIndex :: [Object] -> String -> ByteString -> IO ()
-addObjectToIndex objects file content = do
+addObjectToIndex objects file content =
   writeObjectsToIndex (object:objects)
   where object = Object{
     objectPerm = [6, 4, 4],
@@ -115,15 +123,15 @@ addObjectToIndex objects file content = do
     }
 
 writeObjectsToIndex :: [Object] -> IO ()
-writeObjectsToIndex objects = do
+writeObjectsToIndex objects =
   IO.writeFile (myGitDirectory ++ "/" ++ indexFile) content
   where content = L.intercalate "\n" (L.map objectToString objects)
 
 objectToString :: Object -> String
-objectToString o = do
-  L.intercalate " " [permToString o, objectType o, objectHash o, objectName o]
+objectToString o =
+  unwords [permToString o, objectType o, objectHash o, objectName o]
   where
-    permToString o = L.foldl (\x y -> x ++ (show y)) "" (objectPerm o)
+    permToString o = L.foldl (\x y -> x ++ show y) "" (objectPerm o)
 
 readIndexObjects :: IO [Object]
 readIndexObjects = do
@@ -143,7 +151,7 @@ parseToObject content = do
       objectType = cols !! 1
   objectChildren <- if objectType == "tree" then readTreeObjects $ cols !! 2 else return []
   return Object{
-    objectPerm = perm (cols !! 0),
+    objectPerm = perm $ L.head cols,
     objectType = cols !! 1,
     objectHash = cols !! 2,
     objectName = cols !! 3,
@@ -151,14 +159,14 @@ parseToObject content = do
     }
   where
     perm :: String -> [Int]
-    perm p = L.map (R.read . pure :: Char -> Int) p
+    perm = L.map (R.read . pure :: Char -> Int)
 
 contentHashFileName :: ByteString -> String
 contentHashFileName content = decode $ unpack $ hex $ SHA1.hash content
 
 calculateHash :: [Object] -> String
-calculateHash tree = do
-  decode $ unpack $ hex $ SHA1.hash $ pack $ encode ("tree\n" ++ (L.intercalate "\n" $ treeString tree))
+calculateHash tree =
+  decode $ unpack $ hex $ SHA1.hash $ pack $ encode ("tree\n" ++ L.intercalate "\n" (treeString tree))
   where
     treeString :: [Object] -> [String]
     treeString = L.map objectToString
@@ -170,19 +178,19 @@ commitCommand args = do
   tree <- if currentCommitHash /= "" then do
     currentCommit <- IO.readFile $ objectFilePath currentCommitHash
     let _:commits = lines currentCommit
-    readTreeObjects $ commits !! 0
+    readTreeObjects $ L.head commits
   else return []
   objects <- readIndexObjects
-  if (L.length objects) == 0 then do
+  if L.null objects then
     IO.hPrint IO.stderr "no stage object"
-  else do
-    if (L.length args /= 2) then do
+  else
+    if L.length args /= 2 then
       IO.hPrint IO.stderr "argument number should be 2"
     else do
-      let author = args !! 0
+      let author = L.head args
           message = args !! 1
       newTree <- foldM convertTree tree objects
-      mapM writeTree' newTree
+      mapM_ writeTree' newTree
       treeHash <- writeTree newTree
       writeCommit treeHash author message
       clearIndex
@@ -199,36 +207,30 @@ searchFile :: String -> [Object] -> Bool
 searchFile path = L.any (\x -> objectType x == "file" && objectName x == path)
 
 appendTree :: [Object] -> Object -> [String] -> [Object]
-appendTree tree indexedObject (path:paths) = do
+appendTree tree indexedObject (path:paths) =
   if objectType indexedObject == "file" then indexedObject:tree
   else [] -- searchTree tree indexedObject
 
 replaceTree :: [Object] -> Object -> [String] -> [Object]
-replaceTree tree indexedObject p@(path:paths) = do
-  -- file
-  if L.length paths == 0 then do
-    if searchFile path tree then do
-      L.map (replaceObject indexedObject p) tree
-    else indexedObject{objectName = path}:tree
-  -- tree
-  else do
-    if searchTree path tree then do
-      L.map (replaceObject indexedObject p) tree
-    else do
-      (createTree indexedObject p):tree
+replaceTree tree indexedObject p@(path:paths)
+  | L.null paths = if searchFile path tree then
+      L.map (replaceObject indexedObject p) tree else
+      indexedObject{objectName = path}:tree
+  | searchTree path tree = L.map (replaceObject indexedObject p) tree
+  | otherwise = createTree indexedObject p:tree
   where
     replaceObject :: Object -> [String] -> Object -> Object
     replaceObject indexedObject (path:paths) object
-      | objectType object == "file" = do
+      | objectType object == "file" =
         if path == objectName object then indexedObject{objectName = path} else object
-      | objectType object == "tree" = do
+      | objectType object == "tree" =
         if path == objectName object then do
           let newTree = replaceTree (objectChildren object) indexedObject paths
           object{objectHash = calculateHash newTree, objectChildren = newTree}
         else object
 
 createTree :: Object -> [String] -> Object
-createTree indexedObject (path:[]) = indexedObject{objectName = path}
+createTree indexedObject [path] = indexedObject{objectName = path}
 createTree indexedObject (path:paths) = do
   let newTree = Object{
     objectName = path,
@@ -247,13 +249,12 @@ writeTree' treeObject
     let file = objectFilePath $ objectHash treeObject
     ifM (doesFileExist file) (return ()) $ do
       newHash <- writeTree $ objectChildren treeObject
-      if newHash /= objectHash treeObject then do
+      when (newHash /= objectHash treeObject) $
         IO.hPrint IO.stderr "tree hash not match"
-      else return ()
 
 writeTree :: [Object] -> IO String
 writeTree objects = do
-  let content = "tree\n" ++ (L.intercalate "\n" $ L.map objectToString objects)
+  let content = "tree\n" ++ L.intercalate "\n" (L.map objectToString objects)
       encodedContent = pack $ encode content
       hash = contentHashFileName encodedContent
   B.writeFile (objectFilePath hash) encodedContent
@@ -267,7 +268,7 @@ writeCommit treeHash author message = do
   if parentCommitHash /= "" then do
     parentCommit <- IO.readFile $ objectFilePath parentCommitHash
     let commits = lines parentCommit
-    if commits !! 0 == treeHash then do
+    if L.head commits == treeHash then do
       IO.hPrint IO.stderr "same commit"
       return ()
     else do
@@ -275,7 +276,6 @@ writeCommit treeHash author message = do
           commitHash = contentHashFileName $ pack $ encode content
       IO.writeFile (objectFilePath commitHash) content
       IO.writeFile refPath commitHash
-      return ()
   else do
     let content = "commit\n" ++ L.intercalate "\n" [treeHash, "", author, message]
         commitHash = contentHashFileName $ pack $ encode content
@@ -290,7 +290,7 @@ currentRef :: IO String
 currentRef = SIO.run $ SIO.readFile (myGitDirectory ++ "/" ++ headFile)
 
 statusCommand :: [String] -> IO ()
-statusCommand args = do
+statusCommand args =
   pPrint =<< readIndexObjects
 
 logCommand :: [String] -> IO ()
@@ -307,7 +307,7 @@ readCommitHash commitHash =
   else do
     commit <- IO.readFile $ objectFilePath commitHash
     let _:commitLines = lines commit
-        treeHash = commitLines !! 0
+        treeHash = L.head commitLines
         parentHash = commitLines !! 1
         author = commitLines !! 2
         message = commitLines !! 3
@@ -350,7 +350,7 @@ resetCommand :: [String] -> IO ()
 resetCommand args = do
   let hash = L.head args
   content <- IO.readFile $ objectFilePath hash
-  let contentType = commitLines !! 0
+  let contentType = L.head commitLines
       commitLines = lines content
   if contentType == "commit" then do
     ref <- currentRef
@@ -365,17 +365,16 @@ diffCommand args = do
   currentCommitHash <- IO.readFile $ myGitDirectory ++ "/" ++ ref
   oneTree <- do
     oneCommit <- IO.readFile $ objectFilePath one
-    readTreeObjects $ (lines oneCommit) !! 0
+    readTreeObjects $ L.head $ lines oneCommit
   anotherTree <- do
     anotherCommit <- IO.readFile $ objectFilePath another
-    readTreeObjects $ (lines anotherCommit) !! 0
-  mapM printDiff $ diff "." oneTree anotherTree
-  return ()
+    readTreeObjects $ L.head $ lines anotherCommit
+  mapM_ printDiff $ diff "." oneTree anotherTree
 
 -- one > another
 diff :: String -> [Object] -> [Object] -> [Diff]
 diff path one another =
-  one >>= (diff' another path)
+  one >>= diff' another path
   where
     diff' :: [Object] -> String -> Object -> [Diff]
     diff' objects path obj = do
@@ -465,8 +464,8 @@ branchCommand args =
   if L.null args then
     IO.putStrLn =<< currentRef
   else do
-    let branch = args !! 0
-        branchFileName = myGitDirectory ++ "/" ++ refsDirectory ++ "/heads/" ++ branch
+    let branch = L.head args
+        branchFileName = myGitDirectory ++ "/" ++ refsDirectory ++ "/" ++ headsDirectory ++ "/" ++ branch
     ifM (doesFileExist branchFileName) (handleError branch) (createNewBranch branch branchFileName)
     where
       handleError :: String -> IO ()
@@ -477,12 +476,12 @@ branchCommand args =
         ref <- currentRef
         currentCommitHash <- IO.readFile $ myGitDirectory ++ "/" ++ ref
         IO.writeFile branchFileName currentCommitHash
-        IO.writeFile (myGitDirectory ++ "/" ++ headFile) (refsDirectory ++ "/heads/" ++ branch)
+        IO.writeFile (myGitDirectory ++ "/" ++ headFile) (refsDirectory ++ "/" ++ headsDirectory ++ "/" ++ branch)
 
 checkoutCommand :: [String] -> IO ()
 checkoutCommand args = do
   let branch = L.head args
-      branchFileName = myGitDirectory ++ "/" ++ refsDirectory ++ "/heads/" ++ branch
+      branchFileName = myGitDirectory ++ "/" ++ refsDirectory ++ "/" ++ headsDirectory ++ "/" ++ branch
   ifM (doesFileExist branchFileName) (checkout branch branchFileName) (handleError branch)
     where
       handleError :: String -> IO ()
@@ -490,4 +489,24 @@ checkoutCommand args = do
         IO.hPutStrLn IO.stderr $ "branch does not exist: " ++ branch
       checkout :: String -> String -> IO ()
       checkout branch branchFileName =
-        IO.writeFile (myGitDirectory ++ "/" ++ headFile) (refsDirectory ++ "/heads/" ++ branch)
+        IO.writeFile (myGitDirectory ++ "/" ++ headFile) (refsDirectory ++ "/" ++ headsDirectory ++ "/" ++ branch)
+
+tagCommand :: [String] -> IO ()
+tagCommand args =
+  if L.null args then do
+    directories <- listDirectory $ myGitDirectory ++ "/" ++ refsDirectory ++ "/" ++ tagsDirectory
+    mapM_ IO.putStrLn directories
+  else do
+    let tag = L.head args
+        tagFileName = myGitDirectory ++ "/" ++ refsDirectory ++ "/" ++ tagsDirectory ++ "/" ++ tag
+    ifM (doesFileExist tagFileName) (handleError tag) (createNewBranch tag tagFileName)
+    where
+      handleError :: String -> IO ()
+      handleError tag =
+        IO.hPutStrLn IO.stderr $ "tag already exists: " ++ tag
+      createNewBranch :: String -> String -> IO ()
+      createNewBranch tag tagFileName = do
+        ref <- currentRef
+        currentCommitHash <- IO.readFile $ myGitDirectory ++ "/" ++ ref
+        IO.writeFile tagFileName currentCommitHash
+
