@@ -39,6 +39,7 @@ packages:
 # (e.g., acme-missiles-0.3)
 extra-deps:
 - strict-io-0.2.2
+- ghc-mod-5.8.0.0
 
 # Override default flag values for local packages and extra-deps
 # flags: {}

@@ -31,6 +31,7 @@ dependencies:
 - strict-io
 - hspec
 - pretty-show
+- hlint
 
 library:
   source-dirs: src

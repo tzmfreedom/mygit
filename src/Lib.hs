@@ -28,6 +28,7 @@ import Control.Monad.Extra
 import Codec.Binary.UTF8.String
 import System.IO.Strict as SIO
 import System.IO as IO
+import Text.Read as R
 import Text.Show.Pretty
 import qualified Crypto.Hash.SHA1 as SHA1
 
@@ -66,10 +67,16 @@ indexFile :: String
 indexFile = "index"
 
 headFile :: String
-headFile = "refs/heads/master"
+headFile = "HEAD"
+
+masterBranchName :: String
+masterBranchName = "master"
 
 objectFilePath :: String -> String
 objectFilePath file = myGitDirectory ++ "/" ++ objectDirectory ++ "/" ++ file
+
+branchFilePath :: String -> String
+branchFilePath branchName = myGitDirectory ++ "/" ++ refsDirectory ++ "/heads/" ++ branchName
 
 initCommand :: [String] -> IO ()
 initCommand args = do
@@ -78,8 +85,9 @@ initCommand args = do
   createDirectory $ myGitDirectory ++ "/" ++ objectDirectory
   createDirectory $ myGitDirectory ++ "/" ++ refsDirectory
   createDirectory $ myGitDirectory ++ "/" ++ refsDirectory ++ "/heads"
-  B.writeFile (myGitDirectory ++ "/" ++ indexFile) ""
-  B.writeFile (myGitDirectory ++ "/" ++ refsDirectory ++ "/heads/master") ""
+  IO.writeFile (myGitDirectory ++ "/" ++ indexFile) ""
+  IO.writeFile (myGitDirectory ++ "/" ++ headFile) (refsDirectory ++ "/heads/master")
+  IO.writeFile (myGitDirectory ++ "/" ++ refsDirectory ++ "/heads/master") ""
 
 addCommand :: [String] -> IO ()
 addCommand args = do
@@ -91,7 +99,7 @@ addCommand args = do
 writeIndex :: String -> ByteString -> IO ()
 writeIndex file content = do
   objects <- readIndexObjects
-  unless (Prelude.any (\x -> file == objectName x) objects) (addObjectToIndex objects file content)
+  unless (L.any (\x -> file == objectName x) objects) (addObjectToIndex objects file content)
 
 addObjectToIndex :: [Object] -> String -> ByteString -> IO ()
 addObjectToIndex objects file content = do
@@ -106,8 +114,8 @@ addObjectToIndex objects file content = do
 
 writeObjectsToIndex :: [Object] -> IO ()
 writeObjectsToIndex objects = do
-  Prelude.writeFile (myGitDirectory ++ "/" ++ indexFile) content
-  where content = L.intercalate "\n" (Prelude.map objectToString objects)
+  IO.writeFile (myGitDirectory ++ "/" ++ indexFile) content
+  where content = L.intercalate "\n" (L.map objectToString objects)
 
 objectToString :: Object -> String
 objectToString o = do
@@ -119,13 +127,13 @@ readIndexObjects :: IO [Object]
 readIndexObjects = do
   content <- SIO.run $ SIO.readFile (myGitDirectory ++ "/" ++ indexFile)
   let linesOfFiles = [x | x <- lines content, x /= ""]
-  Prelude.mapM parseToObject linesOfFiles
+  mapM parseToObject linesOfFiles
 
 readTreeObjects :: String -> IO [Object]
 readTreeObjects treeHash = do
   content <- SIO.run $ SIO.readFile $ objectFilePath treeHash
   let _:linesOfFiles = [x | x <- lines content, x /= ""]
-  Prelude.mapM parseToObject linesOfFiles
+  mapM parseToObject linesOfFiles
 
 parseToObject :: String -> IO Object
 parseToObject content = do
@@ -141,7 +149,7 @@ parseToObject content = do
     }
   where
     perm :: String -> [Int]
-    perm p = Prelude.map (Prelude.read . pure :: Char -> Int) p
+    perm p = L.map (R.read . pure :: Char -> Int) p
 
 contentHashFileName :: ByteString -> String
 contentHashFileName content = decode $ unpack $ hex $ SHA1.hash content
@@ -155,9 +163,10 @@ calculateHash tree = do
 
 commitCommand :: [String] -> IO ()
 commitCommand args = do
-  currentCommitHash <- currentRef
+  ref <- currentRef
+  currentCommitHash <- IO.readFile $ myGitDirectory ++ "/" ++ ref
   tree <- if currentCommitHash /= "" then do
-    currentCommit <- Prelude.readFile $ objectFilePath currentCommitHash
+    currentCommit <- IO.readFile $ objectFilePath currentCommitHash
     let _:commits = lines currentCommit
     readTreeObjects $ commits !! 0
   else return []
@@ -250,9 +259,11 @@ writeTree objects = do
 
 writeCommit :: String -> String -> String -> IO ()
 writeCommit treeHash author message = do
-  parentCommitHash <- currentRef
+  ref <- currentRef
+  let refPath = myGitDirectory ++ "/" ++ ref
+  parentCommitHash <- IO.readFile refPath
   if parentCommitHash /= "" then do
-    parentCommit <- Prelude.readFile $ objectFilePath parentCommitHash
+    parentCommit <- IO.readFile $ objectFilePath parentCommitHash
     let commits = lines parentCommit
     if commits !! 0 == treeHash then do
       IO.hPrint IO.stderr "same commit"
@@ -260,18 +271,18 @@ writeCommit treeHash author message = do
     else do
       let content = "commit\n" ++ L.intercalate "\n" [treeHash, parentCommitHash, author, message]
           commitHash = contentHashFileName $ pack $ encode content
-      Prelude.writeFile (objectFilePath commitHash) content
-      Prelude.writeFile (myGitDirectory ++ "/" ++ headFile) commitHash
+      IO.writeFile (objectFilePath commitHash) content
+      IO.writeFile refPath commitHash
       return ()
   else do
     let content = "commit\n" ++ L.intercalate "\n" [treeHash, "", author, message]
         commitHash = contentHashFileName $ pack $ encode content
-    Prelude.writeFile (objectFilePath commitHash) content
-    Prelude.writeFile (myGitDirectory ++ "/" ++ headFile) commitHash
+    IO.writeFile (objectFilePath commitHash) content
+    IO.writeFile refPath commitHash
     return ()
 
 clearIndex :: IO ()
-clearIndex = Prelude.writeFile (myGitDirectory ++ "/" ++ indexFile) ""
+clearIndex = IO.writeFile (myGitDirectory ++ "/" ++ indexFile) ""
 
 currentRef :: IO String
 currentRef = SIO.run $ SIO.readFile (myGitDirectory ++ "/" ++ headFile)
@@ -282,16 +293,17 @@ statusCommand args = do
 
 logCommand :: [String] -> IO ()
 logCommand args = do
-  commitHash <- Prelude.readFile (myGitDirectory ++ "/" ++ headFile)
+  ref <- IO.readFile (myGitDirectory ++ "/" ++ headFile)
+  commitHash <- IO.readFile (myGitDirectory ++ "/" ++ ref)
   commit <- readCommitHash commitHash
-  Prelude.putStrLn $ renderCommit commit
+  IO.putStrLn $ renderCommit commit
 
 readCommitHash :: String -> IO Commit
 readCommitHash commitHash = do
   if commitHash == "" then do
     return Root
   else do
-    commit <- Prelude.readFile $ objectFilePath commitHash
+    commit <- IO.readFile $ objectFilePath commitHash
     let _:commitLines = lines commit
         treeHash = commitLines !! 0
         parentHash = commitLines !! 1
@@ -307,7 +319,7 @@ readCommitHash commitHash = do
 
 catFileCommand :: [String] -> IO ()
 catFileCommand args = do
-  Prelude.putStrLn =<< Prelude.readFile (objectFilePath $ args !! 0)
+  IO.putStrLn =<< IO.readFile (objectFilePath $ args !! 0)
 
 renderCommit :: Commit -> String
 renderCommit Root = ""
@@ -322,8 +334,11 @@ renderCommit Commit{..} = do
 
 treeCommand :: [String] -> IO ()
 treeCommand args = do
-  currentCommitHash <- if L.length args == 0 then currentRef else return (args !! 0)
-  currentCommit <- Prelude.readFile $ objectFilePath currentCommitHash
+  currentCommitHash <- if L.length args == 0 then do
+    ref <- currentRef
+    IO.readFile $ myGitDirectory ++ "/" ++ ref
+    else return (args !! 0)
+  currentCommit <- IO.readFile $ objectFilePath currentCommitHash
   let _:commits = lines currentCommit
   tree <- readTreeObjects $ commits !! 0
   mapM (printTree "") tree
@@ -333,23 +348,25 @@ treeCommand args = do
 resetCommand :: [String] -> IO ()
 resetCommand args = do
   let hash = args !! 0
-  content <- Prelude.readFile $ objectFilePath hash
+  content <- IO.readFile $ objectFilePath hash
   let contentType = commitLines !! 0
       commitLines = lines content
   if contentType == "commit" then do
-    Prelude.writeFile (myGitDirectory ++ "/" ++ headFile) hash
+    ref <- currentRef
+    IO.writeFile (myGitDirectory ++ "/" ++ ref) hash
   else IO.hPrint IO.stderr ("object type shoule be commit, but " ++ contentType)
 
 diffCommand :: [String] -> IO ()
 diffCommand args = do
   let one = args !! 0
       another = args !! 1
-  currentCommitHash <- currentRef
+  ref <- currentRef
+  currentCommitHash <- IO.readFile $ myGitDirectory ++ "/" ++ ref
   oneTree <- do
-    oneCommit <- Prelude.readFile $ objectFilePath one
+    oneCommit <- IO.readFile $ objectFilePath one
     readTreeObjects $ (lines oneCommit) !! 0
   anotherTree <- do
-    anotherCommit <- Prelude.readFile $ objectFilePath another
+    anotherCommit <- IO.readFile $ objectFilePath another
     readTreeObjects $ (lines anotherCommit) !! 0
   mapM printDiff $ diff "." oneTree anotherTree
   return ()
@@ -418,8 +435,8 @@ printDiff diff = do
         content <- SIO.run $ SIO.readFile $ objectFilePath $ diffAfter diff
         return $ color "green" content
       | diffType diff == "update" = do
-        before <- Prelude.readFile $ objectFilePath $ diffBefore diff
-        after <- Prelude.readFile $ objectFilePath $ diffAfter diff
+        before <- IO.readFile $ objectFilePath $ diffBefore diff
+        after <- IO.readFile $ objectFilePath $ diffAfter diff
         return $ color "red" before ++ "\n" ++ color "green" after
 
 color :: String -> String -> String
@@ -443,3 +460,32 @@ printTree indent obj
     IO.putStrLn $ color "bold" (indent ++ objectName obj ++ "/")
     mapM (printTree (indent ++ "  ")) (objectChildren obj)
     return ()
+
+branchCommand :: [String] -> IO ()
+branchCommand args = do
+  let branch = args !! 0
+  let branchFileName = (myGitDirectory ++ "/" ++ refsDirectory ++ "/heads/" ++ branch)
+  ifM (doesFileExist branchFileName) (handleError branch) (createNewBranch branch branchFileName)
+  where
+    handleError :: String -> IO ()
+    handleError branch = do
+      IO.hPutStrLn IO.stderr $ "branch already exists: " ++ branch
+    createNewBranch :: String -> String -> IO ()
+    createNewBranch branch branchFileName = do
+      ref <- currentRef
+      currentCommitHash <- IO.readFile $ myGitDirectory ++ "/" ++ ref
+      IO.writeFile branchFileName currentCommitHash
+      IO.writeFile (myGitDirectory ++ "/" ++ headFile) branch
+
+checkoutCommand :: [String] -> IO ()
+checkoutCommand args = do
+  let branch = args !! 0
+  let branchFileName = (myGitDirectory ++ "/" ++ refsDirectory ++ "/heads/" ++ branch)
+  ifM (doesFileExist branchFileName) (handleError branch) (checkout branch)
+    where
+      handleError :: String -> IO ()
+      handleError branch = do
+        IO.hPutStrLn IO.stderr $ "branch does not exist: " ++ branch
+      checkout :: String -> IO ()
+      checkout branch = do
+        IO.writeFile (myGitDirectory ++ "/" ++ headFile) branch
