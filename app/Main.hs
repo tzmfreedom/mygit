@@ -17,4 +17,6 @@ main = do
     "cat-file" -> catFileCommand xs
     "tree" -> treeCommand xs
     "diff" -> diffCommand xs
+    "branch" -> branchCommand xs
+    "checkout" -> checkoutCommand xs
     otherwise -> hPutStrLn stderr $ "no such command: " ++ x

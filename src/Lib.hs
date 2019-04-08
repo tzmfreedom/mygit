@@ -11,6 +11,8 @@ module Lib
       catFileCommand,
       treeCommand,
       diffCommand,
+      branchCommand,
+      checkoutCommand,
       Object(..),
       replaceTree,
       searchTree,
@@ -299,8 +301,8 @@ logCommand args = do
   IO.putStrLn $ renderCommit commit
 
 readCommitHash :: String -> IO Commit
-readCommitHash commitHash = do
-  if commitHash == "" then do
+readCommitHash commitHash =
+  if commitHash == "" then
     return Root
   else do
     commit <- IO.readFile $ objectFilePath commitHash
@@ -318,8 +320,8 @@ readCommitHash commitHash = do
     }
 
 catFileCommand :: [String] -> IO ()
-catFileCommand args = do
-  IO.putStrLn =<< IO.readFile (objectFilePath $ args !! 0)
+catFileCommand args =
+  IO.putStrLn =<< IO.readFile (objectFilePath $ L.head args)
 
 renderCommit :: Commit -> String
 renderCommit Root = ""
@@ -334,20 +336,19 @@ renderCommit Commit{..} = do
 
 treeCommand :: [String] -> IO ()
 treeCommand args = do
-  currentCommitHash <- if L.length args == 0 then do
+  currentCommitHash <- if L.null args then do
     ref <- currentRef
     IO.readFile $ myGitDirectory ++ "/" ++ ref
-    else return (args !! 0)
+    else return $ L.head args
   currentCommit <- IO.readFile $ objectFilePath currentCommitHash
   let _:commits = lines currentCommit
-  tree <- readTreeObjects $ commits !! 0
-  mapM (printTree "") tree
-  return ()
+  tree <- readTreeObjects $ L.head commits
+  mapM_ (printTree "") tree
 --  pPrint tree
 
 resetCommand :: [String] -> IO ()
 resetCommand args = do
-  let hash = args !! 0
+  let hash = L.head args
   content <- IO.readFile $ objectFilePath hash
   let contentType = commitLines !! 0
       commitLines = lines content
@@ -358,7 +359,7 @@ resetCommand args = do
 
 diffCommand :: [String] -> IO ()
 diffCommand args = do
-  let one = args !! 0
+  let one = L.head args
       another = args !! 1
   ref <- currentRef
   currentCommitHash <- IO.readFile $ myGitDirectory ++ "/" ++ ref
@@ -373,18 +374,18 @@ diffCommand args = do
 
 -- one > another
 diff :: String -> [Object] -> [Object] -> [Diff]
-diff path one another = do
+diff path one another =
   one >>= (diff' another path)
   where
     diff' :: [Object] -> String -> Object -> [Diff]
     diff' objects path obj = do
       let objName = objectName obj
           target = L.find (\x -> objName == objectName x) objects
-      if objectType obj == "file" then do
+      if objectType obj == "file" then
         createFileDiff path target obj
       else createTreeDiff path target obj
     createFileDiff :: String -> Maybe Object -> Object -> [Diff]
-    createFileDiff path Nothing obj = do
+    createFileDiff path Nothing obj =
       [
         Diff{
           diffFile = path ++ "/" ++ objectName obj,
@@ -394,7 +395,7 @@ diff path one another = do
           }
         ]
     createFileDiff path (Just target) obj
-      | objectHash obj /= objectHash target = do
+      | objectHash obj /= objectHash target =
         [
           Diff {
             diffFile = path ++ "/" ++ objectName obj,
@@ -405,7 +406,7 @@ diff path one another = do
           ]
       | otherwise = []
     createTreeDiff :: String -> Maybe Object -> Object -> [Diff]
-    createTreeDiff path Nothing obj = do
+    createTreeDiff path Nothing obj =
       [
         Diff{
           diffFile = path ++ "/" ++ objectName obj,
@@ -415,19 +416,18 @@ diff path one another = do
           }
         ]
     createTreeDiff path (Just target) obj
-      | objectHash obj /= objectHash target = do
+      | objectHash obj /= objectHash target =
         diff (path ++ "/" ++ objectName obj) (objectChildren obj) (objectChildren target)
       | otherwise = []
 
 printDiff :: Diff -> IO ()
 printDiff diff = do
   content <- diffContent diff
-  mapM IO.putStrLn [
+  mapM_ IO.putStrLn [
     color "bold" (diffType diff ++ " " ++ diffFile diff),
     content,
     ""
     ]
-  return ()
   where
     diffContent :: Diff -> IO String
     diffContent diff
@@ -440,10 +440,10 @@ printDiff diff = do
         return $ color "red" before ++ "\n" ++ color "green" after
 
 color :: String -> String -> String
-color c src = do
-  if c == "" then do
+color c src =
+  if c == "" then
     src
-  else do
+  else
     (case c of
       "red" -> "\x1b[31m"
       "green" -> "\x1b[32m"
@@ -454,38 +454,40 @@ color c src = do
 
 printTree :: String -> Object -> IO ()
 printTree indent obj
-  | objectType obj == "file" = do
-    IO.putStrLn $ (indent ++ objectName obj)
+  | objectType obj == "file" =
+    IO.putStrLn $ indent ++ objectName obj
   | objectType obj == "tree" = do
     IO.putStrLn $ color "bold" (indent ++ objectName obj ++ "/")
-    mapM (printTree (indent ++ "  ")) (objectChildren obj)
-    return ()
+    mapM_ (printTree (indent ++ "  ")) (objectChildren obj)
 
 branchCommand :: [String] -> IO ()
-branchCommand args = do
-  let branch = args !! 0
-  let branchFileName = (myGitDirectory ++ "/" ++ refsDirectory ++ "/heads/" ++ branch)
-  ifM (doesFileExist branchFileName) (handleError branch) (createNewBranch branch branchFileName)
-  where
-    handleError :: String -> IO ()
-    handleError branch = do
-      IO.hPutStrLn IO.stderr $ "branch already exists: " ++ branch
-    createNewBranch :: String -> String -> IO ()
-    createNewBranch branch branchFileName = do
-      ref <- currentRef
-      currentCommitHash <- IO.readFile $ myGitDirectory ++ "/" ++ ref
-      IO.writeFile branchFileName currentCommitHash
-      IO.writeFile (myGitDirectory ++ "/" ++ headFile) branch
+branchCommand args =
+  if L.null args then
+    IO.putStrLn =<< currentRef
+  else do
+    let branch = args !! 0
+        branchFileName = myGitDirectory ++ "/" ++ refsDirectory ++ "/heads/" ++ branch
+    ifM (doesFileExist branchFileName) (handleError branch) (createNewBranch branch branchFileName)
+    where
+      handleError :: String -> IO ()
+      handleError branch =
+        IO.hPutStrLn IO.stderr $ "branch already exists: " ++ branch
+      createNewBranch :: String -> String -> IO ()
+      createNewBranch branch branchFileName = do
+        ref <- currentRef
+        currentCommitHash <- IO.readFile $ myGitDirectory ++ "/" ++ ref
+        IO.writeFile branchFileName currentCommitHash
+        IO.writeFile (myGitDirectory ++ "/" ++ headFile) (refsDirectory ++ "/heads/" ++ branch)
 
 checkoutCommand :: [String] -> IO ()
 checkoutCommand args = do
-  let branch = args !! 0
-  let branchFileName = (myGitDirectory ++ "/" ++ refsDirectory ++ "/heads/" ++ branch)
-  ifM (doesFileExist branchFileName) (handleError branch) (checkout branch)
+  let branch = L.head args
+      branchFileName = myGitDirectory ++ "/" ++ refsDirectory ++ "/heads/" ++ branch
+  ifM (doesFileExist branchFileName) (checkout branch branchFileName) (handleError branch)
     where
       handleError :: String -> IO ()
-      handleError branch = do
+      handleError branch =
         IO.hPutStrLn IO.stderr $ "branch does not exist: " ++ branch
-      checkout :: String -> IO ()
-      checkout branch = do
-        IO.writeFile (myGitDirectory ++ "/" ++ headFile) branch
+      checkout :: String -> String -> IO ()
+      checkout branch branchFileName =
+        IO.writeFile (myGitDirectory ++ "/" ++ headFile) (refsDirectory ++ "/heads/" ++ branch)
