@@ -15,6 +15,10 @@ module Lib
       branchCommand,
       checkoutCommand,
       tagCommand,
+      remoteCommand,
+      configCommand,
+      pushCommand,
+      serverCommand,
       Object(..),
       replaceTree,
       searchTree,
@@ -40,71 +44,8 @@ import Text.Show.Pretty
 import qualified Crypto.Hash.SHA1 as SHA1
 import GHC.Generics
 import Util
-
-data Object = Object{
-  objectPerm :: [Int],
-  objectType :: String,
-  objectHash :: String,
-  objectName :: String,
-  objectChildren :: [Object]
-} deriving (Show, Eq)
-
-data Commit = Commit{
-  commitAuthor :: String,
-  commitMessage :: String,
-  commitHash :: String,
-  commitParent :: Commit
-} | Root deriving (Show, Eq)
-
-data Diff = Diff{
-  diffFile :: String,
-  diffType :: String,
-  diffBefore :: String,
-  diffAfter :: String
-} deriving (Show, Eq)
-
-data Config = Config{
-  configAuthor :: Maybe String,
-  configRemotes :: [Remote]
-} deriving (Show, Eq)
-
-data Remote = Remote{
-  remoteUrl :: String,
-  remoteName :: String
-} deriving (Show, Eq)
-
-myGitDirectory :: String
-myGitDirectory = ".mygit"
-
-refsDirectory :: String
-refsDirectory = "refs"
-
-objectDirectory :: String
-objectDirectory = "objects"
-
-tagsDirectory :: String
-tagsDirectory = "tags"
-
-headsDirectory :: String
-headsDirectory = "heads"
-
-indexFile :: String
-indexFile = "index"
-
-configFile :: String
-configFile = "config"
-
-headFile :: String
-headFile = "HEAD"
-
-masterBranchName :: String
-masterBranchName = "master"
-
-objectFilePath :: String -> String
-objectFilePath file = myGitDirectory ++ "/" ++ objectDirectory ++ "/" ++ file
-
-branchFilePath :: String -> String
-branchFilePath branchName = myGitDirectory ++ "/" ++ refsDirectory ++ "/" ++ headsDirectory ++ "/" ++ branchName
+import Tcp
+import Common
 
 initCommand :: [String] -> IO ()
 initCommand args = do
@@ -547,6 +488,7 @@ printConfig :: Either ParseException Config -> IO ()
 printConfig (Left err) = hPrint stderr err
 printConfig (Right config) = do
   let author = configAuthor config
+  putStr "author: "
   maybe (return ()) IO.putStrLn author
   mapM_ printRemote $ configRemotes config
 
@@ -587,6 +529,21 @@ remoteCommand args
             Remote{remoteName = name, remoteUrl = url}:remotes
       encodeFile (myGitDirectory ++ "/" ++ configFile) config{configRemotes = newRemotes}
   | otherwise = hPutStrLn stderr "arguments should be 0 or 2"
+
+pushCommand :: [String] -> IO ()
+pushCommand args
+  | length args == 2 = do
+    let dest = head args
+        branch = args !! 1
+    push dest branch
+  | otherwise = return ()
+
+serverCommand :: [String] -> IO ()
+serverCommand args = runServer
+
+-- get ls-remote # => refsのリスト
+-- なければ新規作成
+-- あればそこにpush
 
 deriveJSON defaultOptions { fieldLabelModifier = firstLower . drop 6 } ''Config
 deriveJSON defaultOptions { fieldLabelModifier = firstLower . drop 6 } ''Remote

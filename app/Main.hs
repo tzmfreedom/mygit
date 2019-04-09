@@ -20,4 +20,8 @@ main = do
     "branch" -> branchCommand xs
     "checkout" -> checkoutCommand xs
     "tag" -> tagCommand xs
+    "remote" -> remoteCommand xs
+    "config" -> configCommand xs
+    "push" -> pushCommand xs
+    "server" -> serverCommand xs
     otherwise -> hPutStrLn stderr $ "no such command: " ++ x
