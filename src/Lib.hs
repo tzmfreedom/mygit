@@ -100,28 +100,6 @@ readIndexObjects = do
   let linesOfFiles = [x | x <- lines content, x /= ""]
   mapM parseToObject linesOfFiles
 
-readTreeObjects :: String -> IO [Object]
-readTreeObjects treeHash = do
-  content <- SIO.run $ SIO.readFile $ objectFilePath treeHash
-  let _:linesOfFiles = [x | x <- lines content, x /= ""]
-  mapM parseToObject linesOfFiles
-
-parseToObject :: String -> IO Object
-parseToObject content = do
-  let cols = splitOn " " content
-      objectType = cols !! 1
-  objectChildren <- if objectType == "tree" then readTreeObjects $ cols !! 2 else return []
-  return Object{
-    objectPerm = perm $ L.head cols,
-    objectType = cols !! 1,
-    objectHash = cols !! 2,
-    objectName = cols !! 3,
-    objectChildren = objectChildren
-    }
-  where
-    perm :: String -> [Int]
-    perm = L.map (R.read . pure :: Char -> Int)
-
 contentHashFileName :: ByteString -> String
 contentHashFileName content = decode $ unpack $ hex $ SHA1.hash content
 
@@ -261,25 +239,6 @@ logCommand args = do
   commit <- readCommitHash commitHash
   IO.putStrLn $ renderCommit commit
 
-readCommitHash :: String -> IO Commit
-readCommitHash commitHash =
-  if commitHash == "" then
-    return Root
-  else do
-    commit <- IO.readFile $ objectFilePath commitHash
-    let _:commitLines = lines commit
-        treeHash = L.head commitLines
-        parentHash = commitLines !! 1
-        author = commitLines !! 2
-        message = commitLines !! 3
-    parentCommit <- readCommitHash parentHash
-    return Commit{
-      commitHash = commitHash,
-      commitAuthor = author,
-      commitMessage = message,
-      commitParent = parentCommit
-    }
-
 catFileCommand :: [String] -> IO ()
 catFileCommand args =
   IO.putStrLn =<< IO.readFile (objectFilePath $ L.head args)
@@ -326,59 +285,12 @@ diffCommand args = do
   currentCommitHash <- IO.readFile $ myGitDirectory ++ "/" ++ ref
   oneTree <- do
     oneCommit <- IO.readFile $ objectFilePath one
-    readTreeObjects $ L.head $ lines oneCommit
+    readTreeObjects $ (lines oneCommit) !! 1
   anotherTree <- do
     anotherCommit <- IO.readFile $ objectFilePath another
-    readTreeObjects $ L.head $ lines anotherCommit
+    readTreeObjects $ (lines anotherCommit) !! 1
   mapM_ printDiff $ diff "." oneTree anotherTree
 
--- one > another
-diff :: String -> [Object] -> [Object] -> [Diff]
-diff path one another =
-  one >>= diff' another path
-  where
-    diff' :: [Object] -> String -> Object -> [Diff]
-    diff' objects path obj = do
-      let objName = objectName obj
-          target = L.find (\x -> objName == objectName x) objects
-      if objectType obj == "file" then
-        createFileDiff path target obj
-      else createTreeDiff path target obj
-    createFileDiff :: String -> Maybe Object -> Object -> [Diff]
-    createFileDiff path Nothing obj =
-      [
-        Diff{
-          diffFile = path ++ "/" ++ objectName obj,
-          diffType = "add",
-          diffBefore = "",
-          diffAfter = objectHash obj
-          }
-        ]
-    createFileDiff path (Just target) obj
-      | objectHash obj /= objectHash target =
-        [
-          Diff {
-            diffFile = path ++ "/" ++ objectName obj,
-            diffType = "update",
-            diffBefore = objectHash target,
-            diffAfter = objectHash obj
-            }
-          ]
-      | otherwise = []
-    createTreeDiff :: String -> Maybe Object -> Object -> [Diff]
-    createTreeDiff path Nothing obj =
-      [
-        Diff{
-          diffFile = path ++ "/" ++ objectName obj,
-          diffType = "add",
-          diffBefore = "",
-          diffAfter = objectHash obj
-          }
-        ]
-    createTreeDiff path (Just target) obj
-      | objectHash obj /= objectHash target =
-        diff (path ++ "/" ++ objectName obj) (objectChildren obj) (objectChildren target)
-      | otherwise = []
 
 printDiff :: Diff -> IO ()
 printDiff diff = do
@@ -398,19 +310,6 @@ printDiff diff = do
         before <- IO.readFile $ objectFilePath $ diffBefore diff
         after <- IO.readFile $ objectFilePath $ diffAfter diff
         return $ color "red" before ++ "\n" ++ color "green" after
-
-color :: String -> String -> String
-color c src =
-  if c == "" then
-    src
-  else
-    (case c of
-      "red" -> "\x1b[31m"
-      "green" -> "\x1b[32m"
-      "yellow" -> "\x1b[33m"
-      "blue" -> "\x1b[34m"
-      "bold" -> "\x1b[1m"
-      ) ++ src ++ "\x1b[m"
 
 printTree :: String -> Object -> IO ()
 printTree indent obj
@@ -535,7 +434,7 @@ pushCommand args
   | length args == 2 = do
     let dest = head args
         branch = args !! 1
-    push dest branch
+    pushToServer dest branch
   | otherwise = return ()
 
 serverCommand :: [String] -> IO ()

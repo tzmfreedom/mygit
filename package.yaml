@@ -35,6 +35,7 @@ dependencies:
 - yaml
 - aeson
 - network
+- zip-archive
 
 library:
   source-dirs: src

@@ -12,12 +12,15 @@ import Network.Socket.ByteString (recv, sendAll)
 import Foreign.C.Types
 import System.Directory
 import Codec.Binary.UTF8.String
+import System.IO as IO
+import Data.ByteString.Lazy(fromStrict)
+import Codec.Archive.Zip
 import Common
 
 port :: String
 port = "3000"
 
-push dest ref = do
+pushToServer dest ref = do
   addr <- resolve "127.0.0.1" port
   E.bracket (open addr) close talk
   where
@@ -36,12 +39,33 @@ push dest ref = do
       sendAll sock "ls-remote\0tags"
       msg <- recv sock 1024
       C.putStrLn msg
-      let body = createZipArchive findTargetObjects
+      diff <- findDiff "" ""
+      body <- createZipArchive diff
       sendAll sock $ S.append "commit\0" body
-    findTargetObjects :: [Object]
-    findTargetObjects = []
-    createZipArchive :: [Object] -> S.ByteString
-    createZipArchive objects = ""
+    findDiff :: String -> String -> IO [Diff]
+    findDiff from to = do
+      ref <- IO.readFile (myGitDirectory ++ "/" ++ headFile)
+      commitHash <- IO.readFile (myGitDirectory ++ "/" ++ ref)
+      commit <- readCommitHash commitHash
+      fromTree <- do
+        fromCommit <- IO.readFile $ objectFilePath from
+        readTreeObjects $ (lines fromCommit) !! 1
+      toTree <- do
+        toCommit <- IO.readFile $ objectFilePath to
+        readTreeObjects $ (lines toCommit) !! 1
+      return $ diff "." fromTree toTree
+
+    createZipArchive :: [Diff] -> IO S.ByteString
+    createZipArchive diff =
+      return ""
+      where
+        entry :: Diff -> IO Entry
+        entry d = do
+          let path = objectFilePath $ diffAfter d
+          content <- S.readFile path
+          return $ toEntry path 0 $ fromStrict content
+        content :: Diff -> IO String
+        content = IO.readFile . objectFilePath . diffAfter
 
 runServer :: IO ()
 runServer =
@@ -93,6 +117,6 @@ runServer =
     addDirectoryPath dir path = dir ++ "/" ++ path
     formatRef :: FilePath -> IO S.ByteString
     formatRef file = do
-      refHash <- readFile $ myGitDirectory ++ "/" ++ refsDirectory ++ "/" ++ file
+      refHash <- IO.readFile $ myGitDirectory ++ "/" ++ refsDirectory ++ "/" ++ file
       return $ S.pack . encode $ file ++ ' ':refHash
 
