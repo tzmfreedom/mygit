@@ -74,17 +74,25 @@ pushToServer dest = do
           readTreeObjects $ lines toCommit !! 1
         parentDiff <- findDiff (commitParent commit) toCommitHash
         commitDiff <- createCommitDiff from
-        return $ commitDiff:diffWithTree "." fromTree toTree ++ parentDiff
+        return $ commitDiff ++ diffWithTree "." fromTree toTree ++ parentDiff
         where
-          createCommitDiff :: String -> IO Diff
-          createCommitDiff from = do
-            fromCommit <- IO.readFile $ objectFilePath from
-            return Diff{
-              diffFile = objectFilePath from,
-              diffType = "add",
-              diffBefore = "",
-              diffAfter = lines fromCommit !! 1
+          createCommitDiff :: String -> IO [Diff]
+          createCommitDiff commitHash = do
+            commit <- IO.readFile $ objectFilePath commitHash
+            return [
+              Diff{
+                diffFile = "commit",
+                diffType = "add",
+                diffBefore = "",
+                diffAfter = commitHash
+                },
+              Diff{
+                diffFile = "tree",
+                diffType = "add",
+                diffBefore = "",
+                diffAfter = lines commit !! 1
               }
+              ]
     findCommit :: String -> IO Bool
     findCommit targetCommitHash = do
       commit <- currentCommit
@@ -153,11 +161,18 @@ runServer =
       void $ forkFinally (talk conn) (\_ -> close conn)
     talk :: Socket -> IO ()
     talk conn = do
-      msg <- recv conn 1024
+      msg <- recvAll conn
       unless (S.null msg) $ do
         let method:body = S.split 0 msg
         dispatch method (head body) conn
         talk conn
+    recvAll :: Socket -> IO S.ByteString
+    recvAll sock = do
+      msg <- recv sock 1024
+      if S.length msg < 1024 then return msg
+      else do
+        msg' <- recvAll sock
+        return $ S.append msg msg'
     dispatch :: S.ByteString -> S.ByteString -> Socket -> IO ()
     dispatch method body conn
       | method == "ls-remote" = do
