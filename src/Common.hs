@@ -172,3 +172,7 @@ diff path one another =
       | objectHash obj /= objectHash target =
         diff (path ++ "/" ++ objectName obj) (objectChildren obj) (objectChildren target)
       | otherwise = []
+
+isRoot :: Commit -> Bool
+isRoot Commit{} = False
+isRoot Root = True

@@ -285,10 +285,10 @@ diffCommand args = do
   currentCommitHash <- IO.readFile $ myGitDirectory ++ "/" ++ ref
   oneTree <- do
     oneCommit <- IO.readFile $ objectFilePath one
-    readTreeObjects $ (lines oneCommit) !! 1
+    readTreeObjects $ lines oneCommit !! 1
   anotherTree <- do
     anotherCommit <- IO.readFile $ objectFilePath another
-    readTreeObjects $ (lines anotherCommit) !! 1
+    readTreeObjects $ lines anotherCommit !! 1
   mapM_ printDiff $ diff "." oneTree anotherTree
 
 
@@ -431,10 +431,9 @@ remoteCommand args
 
 pushCommand :: [String] -> IO ()
 pushCommand args
-  | length args == 2 = do
+  | length args == 1 = do
     let dest = head args
-        branch = args !! 1
-    pushToServer dest branch
+    pushToServer dest
   | otherwise = return ()
 
 serverCommand :: [String] -> IO ()

@@ -36,6 +36,7 @@ dependencies:
 - aeson
 - network
 - zip-archive
+- base64-bytestring
 
 library:
   source-dirs: src

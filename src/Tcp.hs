@@ -11,16 +11,21 @@ import Network.Socket hiding (recv)
 import Network.Socket.ByteString (recv, sendAll)
 import Foreign.C.Types
 import System.Directory
-import Codec.Binary.UTF8.String
+import Codec.Binary.UTF8.String as CBS
 import System.IO as IO
-import Data.ByteString.Lazy(fromStrict)
+import Data.ByteString.Lazy(fromStrict, toStrict)
+import Data.ByteString.Base64 as B64
+import Data.Maybe
+import Data.List as L(find, length, drop)
 import Codec.Archive.Zip
+import Control.Monad.Extra
 import Common
 
 port :: String
 port = "3000"
 
-pushToServer dest ref = do
+pushToServer :: String -> IO ()
+pushToServer dest = do
   addr <- resolve "127.0.0.1" port
   E.bracket (open addr) close talk
   where
@@ -34,38 +39,76 @@ pushToServer dest ref = do
       return sock
     talk sock = do
       sendAll sock "ls-remote\0heads"
-      msg <- recv sock 1024
-      C.putStrLn msg
+      heads <- recv sock 1024
       sendAll sock "ls-remote\0tags"
-      msg <- recv sock 1024
-      C.putStrLn msg
-      diff <- findDiff "" ""
-      body <- createZipArchive diff
-      sendAll sock $ S.append "commit\0" body
-    findDiff :: String -> String -> IO [Diff]
-    findDiff from to = do
+      tags <- recv sock 1024
+      ref <- S.readFile (myGitDirectory ++ "/" ++ headFile)
+      let refs = map parseRef (C.lines heads) ++ if tags == "NOTHING" then [] else map parseRef (C.lines tags)
+          ref' = find (\(x,y) -> absoluteRefsPath x == ref) refs
+          targetCommitHash = CBS.decode $ S.unpack $ maybe "" snd ref'
+          absoluteRefsPath = S.append $ S.pack $ CBS.encode (refsDirectory ++ "/")
+      targetCommit <- findCommit targetCommitHash
+      if not targetCommit then hPutStrLn stderr $ "cannot find commit: " ++ targetCommitHash
+      else do
+        commit <- currentCommit
+        diff' <- findDiff commit targetCommitHash
+        body <- createZipArchive diff'
+        sendAll sock $ S.append "commit\0" body
+    findDiff :: Commit -> String -> IO [Diff]
+    findDiff commit toCommitHash
+      | commitHash commit == toCommitHash = return []
+      | isRoot $ commitParent commit = do
+        let from = commitHash commit
+        fromTree <- do
+          fromCommit <- IO.readFile $ objectFilePath from
+          readTreeObjects $ lines fromCommit !! 1
+        return $ diff "." fromTree []
+      | otherwise = do
+        let from = commitHash commit
+            to = commitHash $ commitParent commit
+        fromTree <- do
+          fromCommit <- IO.readFile $ objectFilePath from
+          readTreeObjects $ lines fromCommit !! 1
+        toTree <- do
+          toCommit <- IO.readFile $ objectFilePath to
+          readTreeObjects $ lines toCommit !! 1
+        parentDiff <- findDiff (commitParent commit) toCommitHash
+        return $ diff "." fromTree toTree ++ parentDiff
+    findCommit :: String -> IO Bool
+    findCommit targetCommitHash = do
+      commit <- currentCommit
+      return $ findCommit' commit targetCommitHash
+      where
+        findCommit' :: Commit -> String -> Bool
+        findCommit' Root _  = True
+        findCommit' commit targetCommitHash
+          | targetCommitHash == "" = True
+          | commitHash commit == targetCommitHash = True
+          | otherwise = findCommit' (commitParent commit) targetCommitHash
+    currentCommit :: IO Commit
+    currentCommit = do
       ref <- IO.readFile (myGitDirectory ++ "/" ++ headFile)
       commitHash <- IO.readFile (myGitDirectory ++ "/" ++ ref)
-      commit <- readCommitHash commitHash
-      fromTree <- do
-        fromCommit <- IO.readFile $ objectFilePath from
-        readTreeObjects $ (lines fromCommit) !! 1
-      toTree <- do
-        toCommit <- IO.readFile $ objectFilePath to
-        readTreeObjects $ (lines toCommit) !! 1
-      return $ diff "." fromTree toTree
-
+      readCommitHash commitHash
     createZipArchive :: [Diff] -> IO S.ByteString
-    createZipArchive diff =
-      return ""
+    createZipArchive diff = do
+      ref <- IO.readFile (myGitDirectory ++ "/" ++ headFile)
+      commitHash <- S.readFile (myGitDirectory ++ "/" ++ ref)
+      entries <- mapM entry diff
+      let refEntry = toEntry (myGitDirectory ++ "/" ++ ref) 0 $ fromStrict commitHash
+          archive = Archive{zEntries = refEntry:entries, zSignature = Nothing, zComment = ""}
+      return $ B64.encode $ toStrict $ fromArchive archive
       where
         entry :: Diff -> IO Entry
         entry d = do
           let path = objectFilePath $ diffAfter d
           content <- S.readFile path
           return $ toEntry path 0 $ fromStrict content
-        content :: Diff -> IO String
-        content = IO.readFile . objectFilePath . diffAfter
+    parseRef :: S.ByteString -> (S.ByteString, S.ByteString)
+    parseRef = toTuple . C.words
+      where
+        toTuple [x] = (x,"")
+        toTuple [x,y] = (x,y)
 
 runServer :: IO ()
 runServer =
@@ -110,13 +153,31 @@ runServer =
         let basedir = if body == "heads" then headsDirectory else tagsDirectory
         files <- listDirectory $ myGitDirectory ++ "/" ++ refsDirectory ++ "/" ++ basedir
         formattedRefs <- mapM (formatRef . addDirectoryPath basedir) files
-        sendAll conn $ S.intercalate "\n" formattedRefs
-      | method == "commit" =
-        return ()
+        if null formattedRefs then sendAll conn "NOTHING"
+        else sendAll conn $ S.intercalate "\n" formattedRefs
+      | method == "commit" = do
+        let Right decoded = B64.decode body
+        extractFilesFromArchive [OptDestination tmpDirectory, OptVerbose, OptRecursive] $ toArchive $ fromStrict decoded
+        copyRecursively tmpDirectory
+        where
+          copyRecursively :: FilePath -> IO ()
+          copyRecursively dirpath = do
+            files <- listDirectory dirpath
+            mapM_ (copy dirpath) files
+            where
+              copy :: FilePath -> FilePath -> IO ()
+              copy dirpath filepath = do
+                let abspath= dirpath ++ "/" ++ filepath
+                ifM (doesFileExist abspath) (copyFile abspath $ L.drop (L.length tmpDirectory + 1) abspath) $ do
+                  files <- listDirectory abspath
+                  mapM_ (copy abspath) files
+
     addDirectoryPath :: String -> String -> String
     addDirectoryPath dir path = dir ++ "/" ++ path
     formatRef :: FilePath -> IO S.ByteString
     formatRef file = do
       refHash <- IO.readFile $ myGitDirectory ++ "/" ++ refsDirectory ++ "/" ++ file
-      return $ S.pack . encode $ file ++ ' ':refHash
+      return $ S.pack . CBS.encode $ file ++ ' ':refHash
 
+tmpDirectory :: FilePath
+tmpDirectory = "./tmp"
