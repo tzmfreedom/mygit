@@ -1,0 +1,15 @@
+<html>
+<head></head>
+<body>
+<ul>
+{% for commit in commits %}
+<li><a href="/commits/{{ commit.value.hash }}">{{ commit.value.hash }}</a>
+  <ul>
+    <li>{{ commit.value.author }}</li>
+    <li>{{ commit.value.message }}</li>
+  </ul>
+</li>
+{% endfor %}
+</ul>
+</body>
+</html>

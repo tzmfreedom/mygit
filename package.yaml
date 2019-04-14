@@ -37,6 +37,12 @@ dependencies:
 - network
 - zip-archive
 - base64-bytestring
+- wai
+- warp
+- parsec
+- ede
+- http-types
+- text
 
 library:
   source-dirs: src

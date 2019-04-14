@@ -19,6 +19,7 @@ module Lib
       configCommand,
       pushCommand,
       serverCommand,
+      appCommand,
       Object(..),
       replaceTree,
       searchTree,
@@ -45,6 +46,7 @@ import qualified Crypto.Hash.SHA1 as SHA1
 import GHC.Generics
 import Util
 import Tcp
+import App
 import Common
 
 initCommand :: [String] -> IO ()

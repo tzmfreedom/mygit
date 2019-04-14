@@ -24,4 +24,5 @@ main = do
     "config" -> configCommand xs
     "push" -> pushCommand xs
     "server" -> serverCommand xs
+    "app" -> appCommand xs
     otherwise -> hPutStrLn stderr $ "no such command: " ++ x

@@ -1,0 +1,10 @@
+<html>
+<head></head>
+<body>
+<ul>
+{% for branch in branches %}
+<li><a href="/branches/{{ branch.value }}">{{ branch.value }}</a></li>
+{% endfor %}
+</ul>
+</body>
+</html>

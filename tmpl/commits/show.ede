@@ -1,0 +1,10 @@
+<html>
+<head></head>
+<body>
+<ul>
+{% for object in objects %}
+<li><a href="/blob/{{ commit }}/{{ object.value.name }}">{{ object.value.name}}</a></li>
+{% endfor %}
+</ul>
+</body>
+</html>

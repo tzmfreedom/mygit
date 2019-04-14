@@ -1,0 +1,13 @@
+<html>
+<head></head>
+<body>
+<ul>
+<li>{{ name }}</li>
+<li>{{ type }}</li>
+<li>{{ hash }}</li>
+</ul>
+<pre style="background-color: #EEE; font-size: 1.2rem;">
+{{ content }}
+</pre>
+</body>
+</html>
