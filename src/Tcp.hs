@@ -62,7 +62,8 @@ pushToServer dest = do
         fromTree <- do
           fromCommit <- IO.readFile $ objectFilePath from
           readTreeObjects $ lines fromCommit !! 1
-        return $ diffWithTree "." fromTree []
+        commitDiff <- createCommitDiff from
+        return $ commitDiff ++ diffWithTree "." fromTree []
       | otherwise = do
         let from = commitHash commit
             to = commitHash $ commitParent commit
