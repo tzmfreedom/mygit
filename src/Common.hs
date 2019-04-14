@@ -137,41 +137,75 @@ diff path one another =
       if objectType obj == "file" then
         createFileDiff path target obj
       else createTreeDiff path target obj
-    createFileDiff :: String -> Maybe Object -> Object -> [Diff]
-    createFileDiff path Nothing obj =
-      [
-        Diff{
-          diffFile = path ++ "/" ++ objectName obj,
-          diffType = "add",
-          diffBefore = "",
-          diffAfter = objectHash obj
-          }
-        ]
-    createFileDiff path (Just target) obj
-      | objectHash obj /= objectHash target =
-        [
-          Diff {
-            diffFile = path ++ "/" ++ objectName obj,
-            diffType = "update",
-            diffBefore = objectHash target,
-            diffAfter = objectHash obj
-            }
-          ]
-      | otherwise = []
-    createTreeDiff :: String -> Maybe Object -> Object -> [Diff]
-    createTreeDiff path Nothing obj =
-      [
-        Diff{
-          diffFile = path ++ "/" ++ objectName obj,
-          diffType = "add",
-          diffBefore = "",
-          diffAfter = objectHash obj
-          }
-        ]
-    createTreeDiff path (Just target) obj
-      | objectHash obj /= objectHash target =
-        diff (path ++ "/" ++ objectName obj) (objectChildren obj) (objectChildren target)
-      | otherwise = []
+
+diffWithTree :: String -> [Object] -> [Object] -> [Diff]
+diffWithTree path one another =
+  one >>= diff' another path
+  where
+    diff' :: [Object] -> String -> Object -> [Diff]
+    diff' objects path obj = do
+      let objName = objectName obj
+          target = find (\x -> objName == objectName x) objects
+      if objectType obj == "file" then
+        createFileDiff path target obj
+      else createTreeDiff' path target obj
+
+createFileDiff :: String -> Maybe Object -> Object -> [Diff]
+createFileDiff path Nothing obj =
+  [
+    Diff{
+      diffFile = path ++ "/" ++ objectName obj,
+      diffType = "add",
+      diffBefore = "",
+      diffAfter = objectHash obj
+      }
+    ]
+createFileDiff path (Just target) obj
+  | objectHash obj /= objectHash target =
+    [
+      Diff {
+        diffFile = path ++ "/" ++ objectName obj,
+        diffType = "update",
+        diffBefore = objectHash target,
+        diffAfter = objectHash obj
+        }
+      ]
+  | otherwise = []
+
+createTreeDiff :: String -> Maybe Object -> Object -> [Diff]
+createTreeDiff path Nothing obj =
+  [
+    Diff{
+      diffFile = path ++ "/" ++ objectName obj,
+      diffType = "add",
+      diffBefore = "",
+      diffAfter = objectHash obj
+      }
+    ]
+createTreeDiff path (Just target) obj
+  | objectHash obj /= objectHash target =
+    diff (path ++ "/" ++ objectName obj) (objectChildren obj) (objectChildren target)
+  | otherwise = []
+
+createTreeDiff' :: String -> Maybe Object -> Object -> [Diff]
+createTreeDiff' path Nothing obj =
+  [
+    Diff{
+      diffFile = path ++ "/" ++ objectName obj,
+      diffType = "add",
+      diffBefore = "",
+      diffAfter = objectHash obj
+      }
+    ]
+createTreeDiff' path (Just target) obj
+  | objectHash obj /= objectHash target =
+    Diff{
+      diffFile = path ++ "/" ++ objectName obj,
+      diffType = "add",
+      diffBefore = "",
+      diffAfter = objectHash obj
+      }:diff (path ++ "/" ++ objectName obj) (objectChildren obj) (objectChildren target)
+  | otherwise = []
 
 isRoot :: Commit -> Bool
 isRoot Commit{} = False

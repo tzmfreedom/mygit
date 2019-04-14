@@ -62,7 +62,7 @@ pushToServer dest = do
         fromTree <- do
           fromCommit <- IO.readFile $ objectFilePath from
           readTreeObjects $ lines fromCommit !! 1
-        return $ diff "." fromTree []
+        return $ diffWithTree "." fromTree []
       | otherwise = do
         let from = commitHash commit
             to = commitHash $ commitParent commit
@@ -73,7 +73,18 @@ pushToServer dest = do
           toCommit <- IO.readFile $ objectFilePath to
           readTreeObjects $ lines toCommit !! 1
         parentDiff <- findDiff (commitParent commit) toCommitHash
-        return $ diff "." fromTree toTree ++ parentDiff
+        commitDiff <- createCommitDiff from
+        return $ commitDiff:diffWithTree "." fromTree toTree ++ parentDiff
+        where
+          createCommitDiff :: String -> IO Diff
+          createCommitDiff from = do
+            fromCommit <- IO.readFile $ objectFilePath from
+            return Diff{
+              diffFile = objectFilePath from,
+              diffType = "add",
+              diffBefore = "",
+              diffAfter = lines fromCommit !! 1
+              }
     findCommit :: String -> IO Bool
     findCommit targetCommitHash = do
       commit <- currentCommit
