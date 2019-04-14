@@ -24,7 +24,7 @@ import Common
 type Handler = Request -> IO Response
 
 appCommand :: [String] -> IO ()
-appCommand args = do
+appCommand args =
   run 8080 server
   where
     server :: Application
@@ -34,13 +34,13 @@ appCommand args = do
     getHandler :: Handler
     getHandler req =
       case TP.parse (parseRoute req) "" (CBS.decode $ BS.unpack path) of
-        Left err -> error $ "ParserError"
+        Left err -> error "ParserError"
         Right ls -> ls req
       where
         path :: C.ByteString
         path = rawPathInfo req
     parseRoute :: Request -> Parser Handler
-    parseRoute req = do
+    parseRoute req =
       try (parseTop req) <|> try (parseBranch req) <|> try (parseCommit req) <|> try (parseBlob req)
 
     parseTop :: Request -> Parser Handler
@@ -90,6 +90,10 @@ appCommand args = do
         )
       where
         method = requestMethod req
+    render :: Either String TL.Text -> IO Response
+    render (Left err) = error "hoge"
+    render (Right body) =
+      return $ responseLBS status200 [] $ BSL.fromStrict $ BS.pack $ CBS.encode $ TL.unpack body
     root :: Handler
     root _ = return $ responseFile status200 [] "./tmpl/index.html" Nothing
     branchIndex :: Handler
@@ -99,10 +103,6 @@ appCommand args = do
       let eitherBody = r >>= (`eitherRender` env)
       render eitherBody
       where
-        render :: Either String TL.Text -> IO Response
-        render (Left err) = error "hoge"
-        render (Right body) = do
-          return $ responseLBS status200 [] $ BSL.fromStrict $ BS.pack $ CBS.encode $ TL.unpack body
         getEnv :: IO DA.Object
         getEnv = do
           files <- listDirectory $ myGitDirectory ++ "/refs/heads"
@@ -114,10 +114,6 @@ appCommand args = do
       let eitherBody = r >>= (`eitherRender` env)
       render eitherBody
       where
-        render :: Either String TL.Text -> IO Response
-        render (Left err) = error "hoge"
-        render (Right body) = do
-          return $ responseLBS status200 [] $ BSL.fromStrict $ BS.pack $ CBS.encode $ TL.unpack body
         getEnv :: IO DA.Object
         getEnv = do
           commitHash <- IO.readFile (myGitDirectory ++ "/" ++ refsDirectory ++ "/" ++ headsDirectory ++ "/" ++ branchId)
@@ -128,11 +124,11 @@ appCommand args = do
         createCommits :: Commit -> [DA.Object]
         createCommits Root = []
         createCommits commit =
-          (fromPairs [
+          fromPairs [
             "hash" .= commitHash commit,
             "author" .= commitAuthor commit,
             "message" .= commitMessage commit
-            ]):(createCommits $ commitParent commit)
+            ]:createCommits (commitParent commit)
     commitShow :: String -> Handler
     commitShow commitId _ = do
       r <- eitherParseFile "./tmpl/commits/show.ede"
@@ -142,7 +138,7 @@ appCommand args = do
       where
         render :: Either String TL.Text -> IO Response
         render (Left err) = error "hoge"
-        render (Right body) = do
+        render (Right body) =
           return $ responseLBS status200 [] $ BSL.fromStrict $ BS.pack $ CBS.encode $ TL.unpack body
         getEnv :: IO DA.Object
         getEnv = do
@@ -167,10 +163,6 @@ appCommand args = do
       let eitherBody = r >>= (`eitherRender` env)
       render eitherBody
       where
-        render :: Either String TL.Text -> IO Response
-        render (Left err) = error "hoge"
-        render (Right body) = do
-          return $ responseLBS status200 [] $ BSL.fromStrict $ BS.pack $ CBS.encode $ TL.unpack body
         getEnv :: Maybe Common.Object -> IO DA.Object
         getEnv (Just blob) = do
           content <- IO.readFile $ objectFilePath $ objectHash blob
