@@ -14,6 +14,7 @@ import Data.ByteString as BS
 import Data.ByteString.Lazy as BSL
 import Data.ByteString.Char8 as C
 import Data.Aeson as DA
+import Data.Functor
 import System.Directory
 import System.IO as IO
 import Data.Text as T
@@ -28,9 +29,7 @@ appCommand args =
   run 8080 server
   where
     server :: Application
-    server req respond = do
-      let handler = getHandler req
-      respond =<< handler
+    server req respond = respond =<< getHandler req
     getHandler :: Handler
     getHandler req =
       case TP.parse (parseRoute req) "" (CBS.decode $ BS.unpack path) of
@@ -54,7 +53,7 @@ appCommand args =
     parseBranch :: Request -> Parser Handler
     parseBranch req = do
       string "/branches"
-      eof *> return (case method of
+      eof $> (case method of
         "GET" -> branchIndex
         _ -> notFound
         ) <|> do
@@ -100,8 +99,7 @@ appCommand args =
     branchIndex _ = do
       r <- eitherParseFile "./tmpl/branches/index.ede"
       env <- getEnv
-      let eitherBody = r >>= (`eitherRender` env)
-      render eitherBody
+      render $ r >>= (`eitherRender` env)
       where
         getEnv :: IO DA.Object
         getEnv = do
@@ -111,16 +109,13 @@ appCommand args =
     branchShow branchId _ = do
       r <- eitherParseFile "./tmpl/branches/show.ede"
       env <- getEnv
-      let eitherBody = r >>= (`eitherRender` env)
-      render eitherBody
+      render $ r >>= (`eitherRender` env)
       where
         getEnv :: IO DA.Object
         getEnv = do
           commitHash <- IO.readFile (myGitDirectory ++ "/" ++ refsDirectory ++ "/" ++ headsDirectory ++ "/" ++ branchId)
           commit <- readCommitHash commitHash
-          let commits = createCommits commit
-          files <- listDirectory $ myGitDirectory ++ "/refs/heads/"
-          return (fromPairs [ "branch" .= branchId, "commits" .= commits ] :: DA.Object)
+          return (fromPairs [ "branch" .= branchId, "commits" .= createCommits commit ] :: DA.Object)
         createCommits :: Commit -> [DA.Object]
         createCommits Root = []
         createCommits commit =
@@ -133,8 +128,7 @@ appCommand args =
     commitShow commitId _ = do
       r <- eitherParseFile "./tmpl/commits/show.ede"
       env <- getEnv
-      let eitherBody = r >>= (`eitherRender` env)
-      render eitherBody
+      render $ r >>= (`eitherRender` env)
       where
         render :: Either String TL.Text -> IO Response
         render (Left err) = error "hoge"
@@ -143,8 +137,7 @@ appCommand args =
         getEnv :: IO DA.Object
         getEnv = do
           commit <- IO.readFile $ objectFilePath commitId
-          let treeHash = L.lines commit !! 1
-          tree <- readTreeObjects treeHash
+          tree <- readTreeObjects $ L.lines commit !! 1
           return (fromPairs [ "commit" .= commitId, "objects" .= L.map treeToObject tree ] :: DA.Object)
         treeToObject :: Common.Object -> DA.Object
         treeToObject obj =
@@ -157,12 +150,12 @@ appCommand args =
     blobShow commitId path _ = do
       commit <- IO.readFile $ objectFilePath commitId
       tree <- readTreeObjects $ L.lines commit !! 1
-      let target = L.find (\x -> objectName x == path) tree
       r <- eitherParseFile "./tmpl/blob/show.ede"
-      env <- getEnv target
-      let eitherBody = r >>= (`eitherRender` env)
-      render eitherBody
+      env <- getEnv $ findObject tree
+      render $ r >>= (`eitherRender` env)
       where
+        findObject :: [Common.Object] -> Maybe Common.Object
+        findObject = L.find (\x -> objectName x == path)
         getEnv :: Maybe Common.Object -> IO DA.Object
         getEnv (Just blob) = do
           content <- IO.readFile $ objectFilePath $ objectHash blob
