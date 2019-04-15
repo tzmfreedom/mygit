@@ -17,16 +17,18 @@ import Data.Aeson as DA
 import Data.Functor
 import System.Directory
 import System.IO as IO
+import Data.Maybe
 import Data.Text as T
 import Data.Text.Lazy as TL
 import Data.List as L
+import Data.List.Split as DLS
 import Common
 
 type Handler = Request -> IO Response
 
 appCommand :: [String] -> IO ()
 appCommand args =
-  run 8080 server
+  run 8000 server
   where
     server :: Application
     server req respond = respond =<< getHandler req
@@ -139,31 +141,49 @@ appCommand args =
           commit <- IO.readFile $ objectFilePath commitId
           tree <- readTreeObjects $ L.lines commit !! 1
           return (fromPairs [ "commit" .= commitId, "objects" .= L.map treeToObject tree ] :: DA.Object)
-        treeToObject :: Common.Object -> DA.Object
-        treeToObject obj =
-          fromPairs [
-            "name" .= objectName obj,
-            "hash" .= objectHash obj,
-            "type" .= objectType obj
-            ]
     blobShow :: String -> String -> Handler
     blobShow commitId path _ = do
       commit <- IO.readFile $ objectFilePath commitId
       tree <- readTreeObjects $ L.lines commit !! 1
       r <- eitherParseFile "./tmpl/blob/show.ede"
-      env <- getEnv $ findObject tree
+      env <- getEnv $ findObject tree $ DLS.splitOn "/" path
       render $ r >>= (`eitherRender` env)
       where
-        findObject :: [Common.Object] -> Maybe Common.Object
-        findObject = L.find (\x -> objectName x == path)
+        findObject :: [Common.Object] -> [String] -> Maybe Common.Object
+        findObject tree (p:[]) = L.find (\x -> objectName x == p) tree
+        findObject tree (p:paths) = do
+          let target = L.find (\x -> objectName x == p) tree
+          if isJust target then do
+            let Just obj = target
+            if objectType obj == "tree" then findObject (objectChildren obj) paths
+            else error "hoge"
+          else target
         getEnv :: Maybe Common.Object -> IO DA.Object
         getEnv (Just blob) = do
           content <- IO.readFile $ objectFilePath $ objectHash blob
+          objects <- getObjects blob
           return (fromPairs [
+            "path" .= path,
+            "commit" .= commitId,
             "name" .= objectName blob,
             "hash" .= objectHash blob,
             "type" .= objectType blob,
-            "content" .= content
+            "content" .= content,
+            "objects" .= objects
             ] :: DA.Object)
+        getObjects :: Common.Object -> IO [DA.Object]
+        getObjects object = do
+          if objectType object == "file" then return []
+          else do
+            tree <- readTreeObjects $ objectHash object
+            return $ L.map treeToObject tree
+    treeToObject :: Common.Object -> DA.Object
+    treeToObject obj =
+      fromPairs [
+        "name" .= objectName obj,
+        "hash" .= objectHash obj,
+        "type" .= objectType obj
+        ]
+
     notFound :: Handler
     notFound _ = return $ responseFile status200 [] "./tmpl/index.html" Nothing

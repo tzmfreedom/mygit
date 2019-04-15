@@ -1,13 +1,22 @@
 <html>
 <head></head>
 <body>
-<ul>
-<li>{{ name }}</li>
-<li>{{ type }}</li>
-<li>{{ hash }}</li>
-</ul>
-<pre style="background-color: #EEE; font-size: 1.2rem;">
-{{ content }}
-</pre>
+  <ul>
+    <li>{{ name }}</li>
+    <li>{{ type }}</li>
+    <li>{{ hash }}</li>
+  </ul>
+  <hr/>
+  {% if type == "tree" %}
+    <ul>
+      {% for object in objects %}
+      <li><a href="/blob/{{ commit }}/{{ path }}/{{ object.value.name }}">{{ object.value.name}}</a></li>
+      {% endfor %}
+    </ul>
+  {% else %}
+    <pre style="background-color: #EEE; font-size: 1.2rem;">
+    {{ content }}
+    </pre>
+  {% endif %}
 </body>
 </html>
